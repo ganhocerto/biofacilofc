@@ -777,20 +777,32 @@ export function getSuggestedWhatsAppMessage(nicheSlugOrName: string, companyName
   if (niche.includes('barbearia') || niche.includes('barber')) {
     return `Olá! Vim pelo site da ${name} e gostaria de agendar meu horário.`;
   }
-  if (niche.includes('restaurante') || niche.includes('gastronomia') || niche.includes('hamburgueria')) {
+  if (niche.includes('beleza') || niche.includes('estetica') || niche.includes('salao')) {
+    return `Olá! Vim pelo site da ${name} e gostaria de agendar um atendimento.`;
+  }
+  if (niche.includes('gastronomia') || niche.includes('delivery') || niche.includes('restaurante')) {
     return `Olá! Vim pelo site da ${name} e gostaria de fazer um pedido / saber mais.`;
   }
-  if (niche.includes('personal') || niche.includes('fitness') || niche.includes('treino')) {
-    return `Olá! Vim pelo site da ${name} e gostaria de saber mais sobre os treinos.`;
+  if (niche.includes('loja') || niche.includes('comercio')) {
+    return `Olá! Vim pelo site da ${name} e gostaria de ver os produtos disponíveis.`;
   }
-  if (niche.includes('imoveis') || niche.includes('corretor')) {
-    return `Olá! Vim pelo site da ${name} e gostaria de mais informações.`;
+  if (niche.includes('academica') || niche.includes('formacao') || niche.includes('curso')) {
+    return `Olá! Vim pelo site da ${name} e gostaria de informações sobre os cursos/formações.`;
   }
-  if (niche.includes('mecanica') || niche.includes('automotivo') || niche.includes('oficina')) {
-    return `Olá! Vim pelo site da ${name} e gostaria de solicitar um atendimento.`;
+  if (niche.includes('servicos') || niche.includes('profissional')) {
+    return `Olá! Vim pelo site da ${name} e gostaria de solicitar um orçamento.`;
   }
-  if (niche.includes('estetica') || niche.includes('beleza') || niche.includes('salao')) {
-    return `Olá! Vim pelo site da ${name} e gostaria de agendar um atendimento.`;
+  if (niche.includes('premium')) {
+    return `Olá! Vim pelo site da ${name} e gostaria de conhecer as soluções exclusivas.`;
+  }
+  if (niche.includes('chatbot') || niche.includes('bot')) {
+    return `Olá! Vim pelo site da ${name} e gostaria de saber como funciona o atendimento automático.`;
+  }
+  if (niche.includes('saude') || niche.includes('bem-estar') || niche.includes('personal') || niche.includes('fitness')) {
+    return `Olá! Vim pelo site da ${name} e gostaria de agendar uma consulta / saber mais.`;
+  }
+  if (niche.includes('portfolio') || niche.includes('criador') || niche.includes('artista')) {
+    return `Olá! Vim pelo site da ${name} e adorei seu portfólio, gostaria de conversar sobre um projeto.`;
   }
   return `Olá! Vim pelo site da ${name} e gostaria de mais informações.`;
 }

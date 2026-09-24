@@ -557,7 +557,7 @@ export const AdminDashboard: React.FC = () => {
               </div>
               <h3 className="font-bold text-white text-base mb-1">GERENCIAR NICHOS</h3>
               <p className="text-xs text-gray-400">
-                Exiba, ative, ordene e configure ícones para os 25 nichos profissionais.
+                Exiba, ative, ordene e configure ícones para os 10 nichos oficiais.
               </p>
             </button>
           </div>
@@ -1283,14 +1283,14 @@ export const AdminDashboard: React.FC = () => {
       )}
 
       {/* ========================================================================= */}
-      {/* 5. NICHOS (25 NICHOS DINÂMICOS) */}
+      {/* 5. NICHOS (10 NICHOS OFICIAIS) */}
       {/* ========================================================================= */}
       {adminSection === 'niches' && (
         <div className="space-y-6">
           <div className="flex items-center justify-between">
             <div>
               <h2 className="text-xl font-display font-bold text-white">Nichos Cadastrados ({niches.length})</h2>
-              <p className="text-xs text-gray-400">Gerencie a lista dos 25 nichos no Firestore.</p>
+              <p className="text-xs text-gray-400">Gerencie a lista dos 10 nichos oficiais no Firestore.</p>
             </div>
             <button
               onClick={handleOpenNewNiche}
@@ -1481,14 +1481,14 @@ export const AdminDashboard: React.FC = () => {
 
           <div className="bg-[#0e0d1a] border border-purple-500/20 rounded-2xl p-5 space-y-4">
             <div>
-              <h4 className="text-sm font-bold text-white mb-1">Sincronização dos 25 Nichos</h4>
+              <h4 className="text-sm font-bold text-white mb-1">Sincronização dos 10 Nichos Oficiais</h4>
               <p className="text-xs text-gray-400 leading-relaxed mb-3">
-                Verifica se todos os 25 nichos oficiais estão presentes na coleção Firestore e adiciona os que faltarem sem sobrescrever alterações existentes.
+                Verifica se todos os 10 nichos oficiais estão presentes na coleção Firestore e adiciona os que faltarem sem sobrescrever alterações existentes.
               </p>
               <button
                 onClick={async () => {
                   await seedInitialDataIfEmpty();
-                  alert('Sincronização dos 25 nichos concluída com sucesso!');
+                  alert('Sincronização dos 10 nichos concluída com sucesso!');
                 }}
                 className="px-4 py-2 bg-purple-600 hover:bg-purple-500 text-white font-semibold rounded-xl text-xs flex items-center gap-1.5"
               >

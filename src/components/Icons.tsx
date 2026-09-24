@@ -26,60 +26,47 @@ import {
   Zap,
   Snowflake,
   PartyPopper,
+  GraduationCap,
+  Briefcase,
+  Crown,
+  Bot,
+  Palette,
   LucideIcon
 } from 'lucide-react';
 
 export const NicheIconMap: Record<string, LucideIcon> = {
-  // 01 — Barbearia
+  // 10 Nichos Oficiais Bio Fácil
   Scissors,
-  // 02 — Salão de Beleza
   Sparkles,
-  // 03 — Estética & Procedimentos
-  HeartPulse,
-  // 04 — Manicure & Nail Designer
-  Hand,
-  // 05 — Restaurante & Gastronomia
   Utensils,
-  // 06 — Pizzaria & Lanchonete
-  Pizza,
-  // 07 — Confeitaria & Doces
-  Cake,
-  // 08 — Personal Trainer
-  Dumbbell,
-  // 09 — Academia & Fitness
-  Activity,
-  // 10 — Corretor de Imóveis
-  Building,
-  // 11 — Advocacia
-  Scale,
-  // 12 — Fotógrafo & Videomaker
+  ShoppingBag,
+  GraduationCap,
+  Briefcase,
+  Crown,
+  Bot,
+  HeartPulse,
+  Palette,
   Camera,
-  // 13 — Cantor / DJ / Artista
+  // Outros ícones
+  Hand,
+  Pizza,
+  Cake,
+  Dumbbell,
+  Activity,
+  Building,
+  Scale,
   Music,
   Mic,
-  // 14 — Mecânica & Automotivo
   Wrench,
-  // 15 — Motorista Particular
   Car,
-  // 16 — Clínica & Consultório
   Stethoscope,
-  // 17 — Odontologia
   Smile,
-  // 18 — Pet Shop & Banho/Tosa
   PawPrint,
-  // 19 — Tatuador & Body Art
   PenTool,
-  // 20 — Loja & Comércio
-  ShoppingBag,
-  // 21 — Moda & Boutique
   Shirt,
-  // 22 — Perfumaria & Cosméticos
   Droplets,
-  // 23 — Eletricista / Encanador / Serviços
   Zap,
-  // 24 — Refrigeração & Ar-Condicionado
   Snowflake,
-  // 25 — Eventos & Festas
   PartyPopper,
 };
 

@@ -68,6 +68,8 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
           doc(db, 'niches', item.id),
           {
             ...item,
+            name: item.name,
+            description: '',
             createdAt: data?.createdAt || new Date().toISOString(),
             updatedAt: new Date().toISOString(),
           },
@@ -86,6 +88,22 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
           });
         }
       } else {
+        // Update any existing template with obsolete niche IDs
+        for (const tDoc of templatesSnap.docs) {
+          const tData = tDoc.data();
+          if (tData.nicheId === 'estetica' || tData.nicheId === 'salao-beleza') {
+            await updateDoc(doc(db, 'templates', tDoc.id), {
+              nicheId: 'beleza-estetica',
+              nicheName: 'Beleza & Estética',
+            }).catch(() => {});
+          } else if (tData.nicheId === 'restaurante-gastronomia') {
+            await updateDoc(doc(db, 'templates', tDoc.id), {
+              nicheId: 'gastronomia-delivery',
+              nicheName: 'Gastronomia & Delivery',
+            }).catch(() => {});
+          }
+        }
+
         // Ensure Black Crown Barber Club template is kept up to date
         const barberDoc = await getDoc(doc(db, 'templates', 'template-barbearia-luxo')).catch(() => null);
         if (!barberDoc || !barberDoc.exists() || barberDoc.data()?.name === 'Barbearia Viking & Navalha') {
