@@ -1,0 +1,7 @@
+{
+  "name": "BIO FÁCIL",
+  "description": "Plataforma premium para criação, personalização visual e exportação de biosites profissionais com suporte a importação HTML/ZIP e modelos multisetor.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
+

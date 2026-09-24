@@ -1,0 +1,112 @@
+{
+  "entities": {
+    "user": {
+      "title": "User Profile",
+      "description": "User profile with role-based access control and approval status",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "maxLength": 128 },
+        "email": { "type": "string", "format": "email", "maxLength": 200 },
+        "displayName": { "type": "string", "maxLength": 100 },
+        "role": { "type": "string", "enum": ["admin", "user"] },
+        "status": { "type": "string", "enum": ["pending", "approved", "blocked", "rejected"] },
+        "createdAt": { "type": "string", "maxLength": 50 },
+        "updatedAt": { "type": "string", "maxLength": 50 }
+      },
+      "required": ["uid", "email", "displayName", "role", "status"]
+    },
+    "admin": {
+      "title": "Admin Record",
+      "description": "Trusted administrative reference document",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "maxLength": 128 },
+        "email": { "type": "string", "format": "email", "maxLength": 200 },
+        "assignedAt": { "type": "string", "maxLength": 50 }
+      },
+      "required": ["uid", "email"]
+    },
+    "niche": {
+      "title": "Business Niche",
+      "description": "Category niche for biosites (e.g., Barbearia, Estética, Gastronomia)",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "name": { "type": "string", "maxLength": 100 },
+        "description": { "type": "string", "maxLength": 300 },
+        "icon": { "type": "string", "maxLength": 50 },
+        "imageUrl": { "type": "string", "maxLength": 2000 },
+        "order": { "type": "integer" },
+        "active": { "type": "boolean" },
+        "modelCount": { "type": "integer" },
+        "createdAt": { "type": "string", "maxLength": 50 },
+        "updatedAt": { "type": "string", "maxLength": 50 }
+      },
+      "required": ["id", "name", "order", "active"]
+    },
+    "template": {
+      "title": "Biosite Template",
+      "description": "Full biosite HTML model with configurable editable fields",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "name": { "type": "string", "maxLength": 150 },
+        "nicheId": { "type": "string", "maxLength": 128 },
+        "nicheName": { "type": "string", "maxLength": 100 },
+        "description": { "type": "string", "maxLength": 1000 },
+        "coverImage": { "type": "string", "maxLength": 500000 },
+        "version": { "type": "integer" },
+        "status": { "type": "string", "enum": ["draft", "published"] },
+        "htmlContent": { "type": "string", "maxLength": 2000000 },
+        "cssContent": { "type": "string", "maxLength": 500000 },
+        "jsContent": { "type": "string", "maxLength": 500000 },
+        "fields": { "type": "array" },
+        "authorId": { "type": "string", "maxLength": 128 },
+        "createdAt": { "type": "string", "maxLength": 50 },
+        "updatedAt": { "type": "string", "maxLength": 50 }
+      },
+      "required": ["id", "name", "nicheId", "version", "status", "htmlContent"]
+    },
+    "project": {
+      "title": "User Biosite Project",
+      "description": "Customized biosite project created by an approved user",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "userId": { "type": "string", "maxLength": 128 },
+        "userEmail": { "type": "string", "maxLength": 200 },
+        "templateId": { "type": "string", "maxLength": 128 },
+        "nicheId": { "type": "string", "maxLength": 128 },
+        "name": { "type": "string", "maxLength": 150 },
+        "slug": { "type": "string", "maxLength": 150 },
+        "customValues": { "type": "object" },
+        "htmlCompiled": { "type": "string", "maxLength": 2000000 },
+        "createdAt": { "type": "string", "maxLength": 50 },
+        "updatedAt": { "type": "string", "maxLength": 50 }
+      },
+      "required": ["id", "userId", "templateId", "name"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "user",
+      "description": "User profiles and RBAC status"
+    },
+    "/admins/{userId}": {
+      "schema": "admin",
+      "description": "Trusted administrative identity records"
+    },
+    "/niches/{nicheId}": {
+      "schema": "niche",
+      "description": "Biosite market categories and niches"
+    },
+    "/templates/{templateId}": {
+      "schema": "template",
+      "description": "Biosite templates created by admins"
+    },
+    "/projects/{projectId}": {
+      "schema": "project",
+      "description": "Client customized biosite projects"
+    }
+  }
+}
