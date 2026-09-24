@@ -262,15 +262,16 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
     await deleteDoc(doc(db, 'templates', id));
   };
 
-  const saveProject = async (project: Omit<UserProject, 'createdAt' | 'updatedAt'>) => {
+  const saveProject = async (project: Partial<UserProject> & { id: string; userId: string }) => {
     const docRef = doc(db, 'projects', project.id);
-    const existing = await docRef;
+    const snap = await getDoc(docRef).catch(() => null);
+    const existingCreatedAt = snap?.exists() ? snap.data()?.createdAt : null;
     await setDoc(
       docRef,
       {
         ...project,
         updatedAt: new Date().toISOString(),
-        createdAt: new Date().toISOString(),
+        createdAt: project.createdAt || existingCreatedAt || new Date().toISOString(),
       },
       { merge: true }
     );

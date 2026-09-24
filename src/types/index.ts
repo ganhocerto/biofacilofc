@@ -70,6 +70,20 @@ export interface BiositeTemplate {
   updatedAt: string;
 }
 
+export type IconStyleType = 'original' | 'minimal' | 'glass' | '3d' | 'brilliant' | 'neon';
+
+export interface SocialItemConfig {
+  enabled: boolean;
+  url: string;
+  style?: IconStyleType;
+}
+
+export interface LogoConfig {
+  size?: 'sm' | 'md' | 'lg';
+  align?: 'center' | 'top' | 'bottom';
+  transparent?: boolean;
+}
+
 export interface UserProject {
   id: string;
   userId: string;
@@ -79,6 +93,11 @@ export interface UserProject {
   name: string;
   slug: string;
   customValues: Record<string, string>;
+  customColors?: Record<string, string>;
+  selectedPalette?: string;
+  iconStyle?: IconStyleType;
+  socialsConfig?: Record<string, SocialItemConfig>;
+  logoConfig?: LogoConfig;
   htmlCompiled: string;
   createdAt: string;
   updatedAt: string;

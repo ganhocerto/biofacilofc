@@ -8,10 +8,10 @@ export const AuthScreen: React.FC = () => {
   const [tab, setTab] = useState<'login' | 'register' | 'forgot'>('login');
 
   const [name, setName] = useState('');
-  const [email, setEmail] = useState('jeanncarllostk00@gmail.com');
-  const [password, setPassword] = useState('Deus@@@mkt');
-  const [confirmPassword, setConfirmPassword] = useState('Deus@@@mkt');
-  const [rememberMe, setRememberMe] = useState(true);
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [rememberMe, setRememberMe] = useState(false);
 
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);

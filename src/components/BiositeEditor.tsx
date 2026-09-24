@@ -1,16 +1,28 @@
 import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
-import { BiositeTemplate, EditableField, UserProject } from '../types';
+import {
+  BiositeTemplate,
+  EditableField,
+  UserProject,
+  IconStyleType,
+  SocialItemConfig,
+  LogoConfig,
+} from '../types';
 import {
   compileBiositeHtml,
   injectVisualInspectorScript,
-  cleanTextContent,
-  normalizeWhatsAppNumber,
   formatPhoneDisplay,
   parseWhatsAppUrl,
   getSuggestedWhatsAppMessage,
   buildWhatsAppUrl,
   normalizeInstagram,
+  normalizeFacebook,
+  normalizeTikTok,
+  normalizeYouTube,
+  READY_PALETTES,
+  generateThemeCss,
+  SOCIAL_SVGS,
 } from '../utils/htmlAnalyzer';
+import { processImageBackground } from '../utils/imageProcess';
 import { downloadBiositeZip } from '../utils/zipManager';
 import { useData } from '../context/DataContext';
 import { useAuth } from '../context/AuthContext';
@@ -33,20 +45,19 @@ import {
   ChevronRight,
   Plus,
   Trash2,
-  ArrowUp,
-  ArrowDown,
-  Link,
+  Palette,
+  Eye,
+  Sliders,
+  Store,
+  Type,
+  Layers,
   MapPin,
   Clock,
   Star,
-  Type,
-  Phone,
-  Layers,
   AlertCircle,
   X,
   FileCode,
-  Sliders,
-  Store,
+  Share2,
 } from 'lucide-react';
 
 interface BiositeEditorProps {
@@ -70,9 +81,12 @@ export const BiositeEditor: React.FC<BiositeEditorProps> = ({
     existingProject?.name || `Meu Biosite - ${template.name}`
   );
 
-  // Status of changes
+  // Status of changes & save state machine
   const [isSaved, setIsSaved] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
+
+  // Download & Copy modals
   const [downloadModalOpen, setDownloadModalOpen] = useState(false);
   const [downloadingZip, setDownloadingZip] = useState(false);
   const [copiedHtml, setCopiedHtml] = useState(false);
@@ -82,11 +96,13 @@ export const BiositeEditor: React.FC<BiositeEditorProps> = ({
   const [deviceView, setDeviceView] = useState<'mobile' | 'desktop'>('mobile');
   const [mobileTab, setMobileTab] = useState<'preview' | 'editor'>('preview');
 
-  // Accordion open states
+  // Accordion states
   const [openAccordions, setOpenAccordions] = useState<Record<string, boolean>>({
     identidade: true,
+    cores: false,
+    icones: false,
     textos: true,
-    especialidades: true,
+    especialidades: false,
     galeria: false,
     whatsapp: true,
     redes: false,
@@ -99,18 +115,26 @@ export const BiositeEditor: React.FC<BiositeEditorProps> = ({
     setOpenAccordions((prev) => ({ ...prev, [key]: !prev[key] }));
   };
 
-  // Active focused field
+  // Active focused field from inspector
   const [activeFieldId, setActiveFieldId] = useState<string | null>(null);
 
-  // Logo URL input temporary state & error
+  // Logo URL temporary input & error
   const [logoUrlInput, setLogoUrlInput] = useState('');
   const [logoUrlError, setLogoUrlError] = useState('');
   const [logoUrlSuccess, setLogoUrlSuccess] = useState(false);
 
+  // Logo upload preview / background removal modal
+  const [logoModalOpen, setLogoModalOpen] = useState(false);
+  const [originalLogoSrc, setOriginalLogoSrc] = useState<string>('');
+  const [removedBgLogoSrc, setRemovedBgLogoSrc] = useState<string | null>(null);
+  const [hasDetectedTransparency, setHasDetectedTransparency] = useState(false);
+  const [isProcessingRemoval, setIsProcessingRemoval] = useState(false);
+  const [selectedBgChoice, setSelectedBgChoice] = useState<'original' | 'removed'>('original');
+
   // Ref for Preview iframe
   const iframeRef = useRef<HTMLIFrameElement>(null);
 
-  // Map of all fields (from template.fields or extracted)
+  // Map of all fields from template
   const fields = useMemo(() => template.fields, [template.fields]);
 
   // Master state of custom values: fieldId -> customized value
@@ -122,11 +146,57 @@ export const BiositeEditor: React.FC<BiositeEditorProps> = ({
     return initial;
   });
 
-  // Company Name helper
-  const companyName = customValues['nome_empresa'] || template.fields.find(f => f.id === 'nome_empresa')?.originalValue || 'Minha Empresa';
+  // Colors & Appearance State
+  const defaultColors = useMemo(() => {
+    return {
+      bg: '#08080c',
+      surface: '#12111a',
+      primary: '#d97706',
+      secondary: '#9333ea',
+      text: '#ffffff',
+      muted: '#9ca3af',
+      glow: 'rgba(217, 119, 6, 0.35)',
+    };
+  }, []);
 
-  // WhatsApp state helpers
-  const initialWhatsAppRaw = customValues['whatsapp'] || template.fields.find(f => f.id === 'whatsapp')?.originalValue || '';
+  const [customColors, setCustomColors] = useState<Record<string, string>>(() => {
+    return existingProject?.customColors || defaultColors;
+  });
+
+  const [selectedPalette, setSelectedPalette] = useState<string>(
+    existingProject?.selectedPalette || 'original'
+  );
+
+  // Icon Style State
+  const [iconStyle, setIconStyle] = useState<IconStyleType>(
+    existingProject?.iconStyle || 'original'
+  );
+
+  // Social Networks Config State
+  const [socialsConfig, setSocialsConfig] = useState<Record<string, SocialItemConfig>>(() => {
+    if (existingProject?.socialsConfig) return existingProject.socialsConfig;
+    return {
+      whatsapp: { enabled: true, url: customValues['whatsapp'] || '' },
+      instagram: { enabled: true, url: customValues['instagram'] || '' },
+      facebook: { enabled: false, url: '' },
+      tiktok: { enabled: false, url: '' },
+      youtube: { enabled: false, url: '' },
+    };
+  });
+
+  // Logo Config State
+  const [logoConfig, setLogoConfig] = useState<LogoConfig>(() => {
+    return existingProject?.logoConfig || { size: 'md', align: 'center', transparent: false };
+  });
+
+  // Helper values
+  const companyName =
+    customValues['nome_empresa'] ||
+    template.fields.find((f) => f.id === 'nome_empresa')?.originalValue ||
+    'Minha Empresa';
+
+  const initialWhatsAppRaw =
+    customValues['whatsapp'] || template.fields.find((f) => f.id === 'whatsapp')?.originalValue || '';
   const parsedWhatsApp = useMemo(() => parseWhatsAppUrl(initialWhatsAppRaw), [initialWhatsAppRaw]);
 
   const [whatsAppPhone, setWhatsAppPhone] = useState(() => parsedWhatsApp.phone || '31999999999');
@@ -135,8 +205,8 @@ export const BiositeEditor: React.FC<BiositeEditorProps> = ({
     return getSuggestedWhatsAppMessage(template.nicheId || template.nicheName, companyName);
   });
 
-  // Instagram state helper
-  const initialInstagramRaw = customValues['instagram'] || template.fields.find(f => f.id === 'instagram')?.originalValue || '';
+  const initialInstagramRaw =
+    customValues['instagram'] || template.fields.find((f) => f.id === 'instagram')?.originalValue || '';
   const [instagramInput, setInstagramInput] = useState(() => {
     const norm = normalizeInstagram(initialInstagramRaw);
     return norm.handle || '@blackcrownbarber';
@@ -144,75 +214,122 @@ export const BiositeEditor: React.FC<BiositeEditorProps> = ({
 
   // Gallery items helper
   const galleryFieldIds = useMemo(() => {
-    return fields.filter(f => f.id.startsWith('galeria_') || f.group === 'Galeria').map(f => f.id);
+    return fields
+      .filter((f) => f.id.startsWith('galeria_') || f.group === 'Galeria')
+      .map((f) => f.id);
   }, [fields]);
 
-  // Repeatable specialties/services helper
+  // Specialties indexes helper
   const specialtyIndexes = useMemo(() => {
     const idxs = new Set<number>();
-    fields.forEach(f => {
+    fields.forEach((f) => {
       const match = f.id.match(/^esp_(\d+)_/);
       if (match) idxs.add(parseInt(match[1], 10));
     });
     return Array.from(idxs).sort((a, b) => a - b);
   }, [fields]);
 
-  // Auto carousel settings state
-  const [carouselActive, setCarouselActive] = useState(true);
-  const [carouselInterval, setCarouselInterval] = useState(4);
-
-  // Mark modified
+  // Mark modified helper
   const markModified = () => {
     setIsSaved(false);
+    setSaveError(null);
   };
 
   /**
    * Directly update DOM elements in the preview iframe WITHOUT full reload
    */
-  const updateIframeDom = useCallback((fieldId: string, value: string) => {
+  const updateIframeDom = useCallback(
+    (fieldId: string, value: string) => {
+      const doc = iframeRef.current?.contentDocument;
+      if (!doc) return;
+
+      const textEls = doc.querySelectorAll(`[data-bio-text="${fieldId}"]`);
+      if (textEls.length > 0) {
+        textEls.forEach((el) => {
+          el.textContent = value;
+        });
+        return;
+      }
+
+      const imgEls = doc.querySelectorAll(`[data-bio-image="${fieldId}"]`);
+      if (imgEls.length > 0) {
+        imgEls.forEach((el) => {
+          (el as HTMLImageElement).src = value;
+        });
+        return;
+      }
+
+      const linkEls = doc.querySelectorAll(`[data-bio-link="${fieldId}"]`);
+      if (linkEls.length > 0) {
+        linkEls.forEach((el) => {
+          (el as HTMLAnchorElement).href = value;
+        });
+        return;
+      }
+
+      const field = fields.find((f) => f.id === fieldId);
+      if (field?.selector) {
+        const el = doc.querySelector(field.selector);
+        if (el) {
+          if (field.attr === 'src') (el as HTMLImageElement).src = value;
+          else if (field.attr === 'href') (el as HTMLAnchorElement).href = value;
+          else el.textContent = value;
+        }
+      }
+    },
+    [fields]
+  );
+
+  /**
+   * Update theme CSS variables & styles dynamically in the preview iframe
+   */
+  const updateIframeTheme = useCallback(
+    (colors: Record<string, string>, currentIconStyle: IconStyleType, currentLogoConfig?: LogoConfig) => {
+      const doc = iframeRef.current?.contentDocument;
+      if (!doc) return;
+      let styleEl = doc.getElementById('bio-custom-theme');
+      if (!styleEl) {
+        styleEl = doc.createElement('style');
+        styleEl.setAttribute('id', 'bio-custom-theme');
+        if (doc.head) doc.head.appendChild(styleEl);
+        else if (doc.body) doc.body.insertBefore(styleEl, doc.body.firstChild);
+      }
+      styleEl.textContent = generateThemeCss(colors, currentIconStyle, currentLogoConfig);
+    },
+    []
+  );
+
+  /**
+   * Update social links & visibility dynamically in the preview iframe
+   */
+  const updateIframeSocials = useCallback((socials: Record<string, SocialItemConfig>) => {
     const doc = iframeRef.current?.contentDocument;
     if (!doc) return;
+    const socialBar = doc.querySelector('.social-bar') || doc.querySelector('[data-bio-social-bar]');
 
-    // 1. Text elements
-    const textEls = doc.querySelectorAll(`[data-bio-text="${fieldId}"]`);
-    if (textEls.length > 0) {
-      textEls.forEach(el => {
-        el.textContent = value;
-      });
-      return;
-    }
-
-    // 2. Image elements
-    const imgEls = doc.querySelectorAll(`[data-bio-image="${fieldId}"]`);
-    if (imgEls.length > 0) {
-      imgEls.forEach(el => {
-        (el as HTMLImageElement).src = value;
-      });
-      return;
-    }
-
-    // 3. Link elements
-    const linkEls = doc.querySelectorAll(`[data-bio-link="${fieldId}"]`);
-    if (linkEls.length > 0) {
-      linkEls.forEach(el => {
-        (el as HTMLAnchorElement).href = value;
-      });
-      return;
-    }
-
-    // 4. Fallback search by ID or Selector
-    const field = fields.find(f => f.id === fieldId);
-    if (field?.selector) {
-      const el = doc.querySelector(field.selector);
-      if (el) {
-        if (field.attr === 'src') (el as HTMLImageElement).src = value;
-        else if (field.attr === 'href') (el as HTMLAnchorElement).href = value;
-        else el.textContent = value;
+    Object.entries(socials).forEach(([key, config]) => {
+      const el = doc.querySelector(`[data-bio-link="${key}"]`);
+      if (!config.enabled) {
+        if (el) (el as HTMLElement).style.display = 'none';
+      } else {
+        if (el) {
+          (el as HTMLElement).style.display = 'inline-flex';
+          if (config.url) (el as HTMLAnchorElement).href = config.url;
+        } else if (socialBar && config.url && SOCIAL_SVGS[key]) {
+          const newA = doc.createElement('a');
+          newA.setAttribute('href', config.url);
+          newA.setAttribute('target', '_blank');
+          newA.setAttribute('class', 'social-btn');
+          newA.setAttribute('data-bio-link', key);
+          newA.setAttribute('title', key);
+          newA.innerHTML = SOCIAL_SVGS[key];
+          socialBar.appendChild(newA);
+        }
       }
-    }
-  }, [fields]);
+    });
+  }, []);
 
-  // Change single field value
+  // Handle single field change
   const handleFieldChange = (fieldId: string, value: string) => {
     markModified();
     setCustomValues((prev) => ({
@@ -222,7 +339,50 @@ export const BiositeEditor: React.FC<BiositeEditorProps> = ({
     updateIframeDom(fieldId, value);
   };
 
-  // WhatsApp Handler
+  // Handle Color Variable Change
+  const handleColorChange = (key: string, value: string) => {
+    markModified();
+    setSelectedPalette('custom');
+    const newColors = { ...customColors, [key]: value };
+    setCustomColors(newColors);
+    updateIframeTheme(newColors, iconStyle, logoConfig);
+  };
+
+  // Handle Ready Palette Selection
+  const handleSelectPalette = (paletteId: string) => {
+    markModified();
+    setSelectedPalette(paletteId);
+    const pal = READY_PALETTES.find((p) => p.id === paletteId);
+    if (pal) {
+      setCustomColors(pal.colors);
+      updateIframeTheme(pal.colors, iconStyle, logoConfig);
+    }
+  };
+
+  // Handle Restore Original Colors
+  const handleRestoreOriginalColors = () => {
+    markModified();
+    setSelectedPalette('original');
+    setCustomColors(defaultColors);
+    updateIframeTheme(defaultColors, iconStyle, logoConfig);
+  };
+
+  // Handle Icon Style Change
+  const handleIconStyleChange = (style: IconStyleType) => {
+    markModified();
+    setIconStyle(style);
+    updateIframeTheme(customColors, style, logoConfig);
+  };
+
+  // Handle Logo Config Change (size, align)
+  const handleLogoConfigChange = (newConfig: Partial<LogoConfig>) => {
+    markModified();
+    const updated = { ...logoConfig, ...newConfig };
+    setLogoConfig(updated);
+    updateIframeTheme(customColors, iconStyle, updated);
+  };
+
+  // Handle WhatsApp change
   const handleWhatsAppChange = (newPhone: string, newMsg: string) => {
     markModified();
     setWhatsAppPhone(newPhone);
@@ -232,10 +392,14 @@ export const BiositeEditor: React.FC<BiositeEditorProps> = ({
       ...prev,
       whatsapp: generatedUrl,
     }));
+    setSocialsConfig((prev) => ({
+      ...prev,
+      whatsapp: { ...prev.whatsapp, url: generatedUrl },
+    }));
     updateIframeDom('whatsapp', generatedUrl);
   };
 
-  // Instagram Handler
+  // Handle Instagram change
   const handleInstagramChange = (input: string) => {
     markModified();
     setInstagramInput(input);
@@ -245,25 +409,96 @@ export const BiositeEditor: React.FC<BiositeEditorProps> = ({
       ...prev,
       instagram: finalUrl,
     }));
+    setSocialsConfig((prev) => ({
+      ...prev,
+      instagram: { ...prev.instagram, url: finalUrl },
+    }));
     updateIframeDom('instagram', finalUrl);
   };
 
-  // Image Upload handler (Base64 transparent safe)
+  // Handle Social Item Update
+  const handleSocialItemUpdate = (key: string, updates: Partial<SocialItemConfig>) => {
+    markModified();
+    const updatedSocials = {
+      ...socialsConfig,
+      [key]: { ...socialsConfig[key], ...updates },
+    };
+    setSocialsConfig(updatedSocials);
+    updateIframeSocials(updatedSocials);
+  };
+
+  // Handle Add Social Network
+  const handleAddSocialNetwork = (key: string) => {
+    markModified();
+    const defaultUrls: Record<string, string> = {
+      facebook: 'https://facebook.com/minhapagina',
+      tiktok: 'https://tiktok.com/@meuperfil',
+      youtube: 'https://youtube.com/@meucanal',
+    };
+    const updated = {
+      ...socialsConfig,
+      [key]: { enabled: true, url: defaultUrls[key] || '' },
+    };
+    setSocialsConfig(updated);
+    updateIframeSocials(updated);
+  };
+
+  // Handle Remove Social Network
+  const handleRemoveSocialNetwork = (key: string) => {
+    markModified();
+    const updated = {
+      ...socialsConfig,
+      [key]: { ...socialsConfig[key], enabled: false },
+    };
+    setSocialsConfig(updated);
+    updateIframeSocials(updated);
+  };
+
+  // Image Upload handler (general fields)
   const handleImageFileUpload = (fieldId: string, e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
     const reader = new FileReader();
-    reader.onload = () => {
+    reader.onload = async () => {
       if (typeof reader.result === 'string') {
-        handleFieldChange(fieldId, reader.result);
         if (fieldId === 'logo') {
-          setLogoUrlSuccess(true);
-          setTimeout(() => setLogoUrlSuccess(false), 2500);
+          // Open Logo Preview & Background Removal Modal
+          const dataUrl = reader.result;
+          setOriginalLogoSrc(dataUrl);
+          setIsProcessingRemoval(true);
+          setLogoModalOpen(true);
+          setSelectedBgChoice('original');
+
+          const processed = await processImageBackground(dataUrl);
+          setRemovedBgLogoSrc(processed.dataUrl);
+          setHasDetectedTransparency(processed.hasTransparency);
+          if (processed.hasTransparency) {
+            setSelectedBgChoice('original');
+          }
+          setIsProcessingRemoval(false);
+        } else {
+          handleFieldChange(fieldId, reader.result);
         }
       }
     };
     reader.readAsDataURL(file);
+    // Reset file input
+    e.target.value = '';
+  };
+
+  // Confirm Logo Modal
+  const handleConfirmLogoModal = () => {
+    const chosenSrc =
+      selectedBgChoice === 'removed' && removedBgLogoSrc
+        ? removedBgLogoSrc
+        : originalLogoSrc;
+    if (chosenSrc) {
+      handleFieldChange('logo', chosenSrc);
+      setLogoUrlSuccess(true);
+      setTimeout(() => setLogoUrlSuccess(false), 2500);
+    }
+    setLogoModalOpen(false);
   };
 
   // Logo URL Apply handler
@@ -300,29 +535,27 @@ export const BiositeEditor: React.FC<BiositeEditorProps> = ({
 
       // Open appropriate accordion
       if (fieldId === 'logo' || fieldId === 'nome_empresa') {
-        setOpenAccordions(p => ({ ...p, identidade: true }));
+        setOpenAccordions((p) => ({ ...p, identidade: true }));
       } else if (fieldId === 'headline' || fieldId === 'subtitulo') {
-        setOpenAccordions(p => ({ ...p, textos: true }));
+        setOpenAccordions((p) => ({ ...p, textos: true }));
       } else if (fieldId.startsWith('esp_')) {
-        setOpenAccordions(p => ({ ...p, especialidades: true }));
+        setOpenAccordions((p) => ({ ...p, especialidades: true }));
       } else if (fieldId.startsWith('galeria_')) {
-        setOpenAccordions(p => ({ ...p, galeria: true }));
+        setOpenAccordions((p) => ({ ...p, galeria: true }));
       } else if (fieldId === 'whatsapp') {
-        setOpenAccordions(p => ({ ...p, whatsapp: true }));
-      } else if (fieldId === 'instagram') {
-        setOpenAccordions(p => ({ ...p, redes: true }));
+        setOpenAccordions((p) => ({ ...p, whatsapp: true }));
+      } else if (['instagram', 'facebook', 'tiktok', 'youtube'].includes(fieldId)) {
+        setOpenAccordions((p) => ({ ...p, redes: true }));
       } else if (fieldId === 'endereco' || fieldId === 'maps') {
-        setOpenAccordions(p => ({ ...p, localizacao: true }));
+        setOpenAccordions((p) => ({ ...p, localizacao: true }));
       } else if (fieldId === 'google_review') {
-        setOpenAccordions(p => ({ ...p, google_review: true }));
+        setOpenAccordions((p) => ({ ...p, google_review: true }));
       } else if (fieldId === 'horario') {
-        setOpenAccordions(p => ({ ...p, horarios: true }));
+        setOpenAccordions((p) => ({ ...p, horarios: true }));
       }
 
-      // Switch to editor tab on mobile
       setMobileTab('editor');
 
-      // Scroll to that element card in editor
       setTimeout(() => {
         const el = document.getElementById(`field-input-${fieldId}`);
         if (el) {
@@ -346,18 +579,36 @@ export const BiositeEditor: React.FC<BiositeEditorProps> = ({
 
   // Initial compiled HTML for iframe initialization
   const initialHtml = useMemo(() => {
-    const compiled = compileBiositeHtml(template.htmlContent, template.fields, customValues);
+    const compiled = compileBiositeHtml(template.htmlContent, template.fields, customValues, {
+      customColors,
+      iconStyle,
+      socialsConfig,
+      logoConfig,
+    });
     return injectVisualInspectorScript(compiled, inspectorActive);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [template.id]);
 
-  // Save to Firestore
+  // Save to Firestore (Strict Rule: any change enables save, exact state transitions)
   const handleSaveProject = async () => {
     if (!currentUser) return;
     setSaving(true);
+    setSaveError(null);
     try {
-      const projectId = existingProject?.id || `proj_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`;
-      const cleanCompiled = compileBiositeHtml(template.htmlContent, template.fields, customValues);
+      const projectId =
+        existingProject?.id || `proj_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`;
+
+      const cleanCompiled = compileBiositeHtml(
+        template.htmlContent,
+        template.fields,
+        customValues,
+        {
+          customColors,
+          iconStyle,
+          socialsConfig,
+          logoConfig,
+        }
+      );
 
       const projectData: UserProject = {
         id: projectId,
@@ -368,6 +619,11 @@ export const BiositeEditor: React.FC<BiositeEditorProps> = ({
         name: projectName.trim() || 'Meu Biosite',
         slug: projectName.toLowerCase().replace(/[^a-z0-9]/g, '-'),
         customValues,
+        customColors,
+        selectedPalette,
+        iconStyle,
+        socialsConfig,
+        logoConfig,
         htmlCompiled: cleanCompiled,
         createdAt: existingProject?.createdAt || new Date().toISOString(),
         updatedAt: new Date().toISOString(),
@@ -375,34 +631,40 @@ export const BiositeEditor: React.FC<BiositeEditorProps> = ({
 
       await saveProject(projectData);
       setIsSaved(true);
+      setSaveError(null);
       if (onSavedSuccess) onSavedSuccess(projectData);
-    } catch (err) {
+    } catch (err: any) {
       console.error('Erro ao salvar projeto no Firestore:', err);
+      setSaveError(err?.message || 'Falha na conexão ao salvar.');
+      setIsSaved(false);
     } finally {
       setSaving(false);
     }
   };
 
-  // Debounced auto-save (after 3 seconds of inactivity)
-  useEffect(() => {
-    if (isSaved) return;
-    const timer = setTimeout(() => {
-      handleSaveProject();
-    }, 3000);
-    return () => clearTimeout(timer);
-  }, [customValues, isSaved]);
-
   // Download ZIP
   const handleDownloadZip = async () => {
     setDownloadingZip(true);
     try {
-      const cleanCompiled = compileBiositeHtml(template.htmlContent, template.fields, customValues);
+      const cleanCompiled = compileBiositeHtml(
+        template.htmlContent,
+        template.fields,
+        customValues,
+        {
+          customColors,
+          iconStyle,
+          socialsConfig,
+          logoConfig,
+        }
+      );
       const manifest = {
         templateId: template.id,
         name: projectName,
         category: template.nicheName,
         version: template.version,
         fields: template.fields,
+        customColors,
+        iconStyle,
       };
       await downloadBiositeZip(projectName, cleanCompiled, manifest);
       setDownloadModalOpen(false);
@@ -413,7 +675,17 @@ export const BiositeEditor: React.FC<BiositeEditorProps> = ({
 
   // Download Single HTML file
   const handleDownloadHtmlFile = () => {
-    const cleanCompiled = compileBiositeHtml(template.htmlContent, template.fields, customValues);
+    const cleanCompiled = compileBiositeHtml(
+      template.htmlContent,
+      template.fields,
+      customValues,
+      {
+        customColors,
+        iconStyle,
+        socialsConfig,
+        logoConfig,
+      }
+    );
     const blob = new Blob([cleanCompiled], { type: 'text/html;charset=utf-8' });
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
@@ -428,7 +700,17 @@ export const BiositeEditor: React.FC<BiositeEditorProps> = ({
 
   // Copy compiled HTML
   const handleCopyHtml = async () => {
-    const cleanCompiled = compileBiositeHtml(template.htmlContent, template.fields, customValues);
+    const cleanCompiled = compileBiositeHtml(
+      template.htmlContent,
+      template.fields,
+      customValues,
+      {
+        customColors,
+        iconStyle,
+        socialsConfig,
+        logoConfig,
+      }
+    );
     await navigator.clipboard.writeText(cleanCompiled);
     setCopiedHtml(true);
     setTimeout(() => setCopiedHtml(false), 2000);
@@ -436,12 +718,10 @@ export const BiositeEditor: React.FC<BiositeEditorProps> = ({
 
   return (
     <div className="flex flex-col h-screen w-full bg-[#050508] text-white overflow-hidden font-sans">
-      
       {/* ─────────────────────────────────────────────────────────
           TOP BAR: BIO FÁCIL | PERSONALIZANDO | STATUS | ACTIONS
          ───────────────────────────────────────────────────────── */}
       <header className="h-14 px-3 sm:px-6 bg-[#0a0914] border-b border-purple-500/20 flex items-center justify-between gap-3 shrink-0 z-20">
-        
         {/* Left: Back & Project Info */}
         <div className="flex items-center gap-2 sm:gap-3 min-w-0">
           <button
@@ -467,22 +747,6 @@ export const BiositeEditor: React.FC<BiositeEditorProps> = ({
 
         {/* Center: Status & Device Switcher */}
         <div className="flex items-center gap-2 sm:gap-3">
-          
-          {/* Saved Status Indicator */}
-          <div className="flex items-center">
-            {isSaved ? (
-              <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-semibold bg-emerald-950/50 text-emerald-300 border border-emerald-500/30">
-                <Check size={12} className="text-emerald-400" />
-                <span className="hidden xs:inline">SALVO</span>
-              </span>
-            ) : (
-              <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-semibold bg-amber-950/60 text-amber-300 border border-amber-500/40 animate-pulse">
-                <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-ping" />
-                <span className="hidden xs:inline">ALTERAÇÕES NÃO SALVAS</span>
-              </span>
-            )}
-          </div>
-
           {/* Inspector Button ("✦ EDITAR PELO PREVIEW") */}
           <button
             onClick={() => setInspectorActive(!inspectorActive)}
@@ -520,29 +784,64 @@ export const BiositeEditor: React.FC<BiositeEditorProps> = ({
           </div>
         </div>
 
-        {/* Right: Actions (Salvar & Baixar) */}
-        <div className="flex items-center gap-1.5 sm:gap-2">
-          <button
-            onClick={handleSaveProject}
-            disabled={saving || isSaved}
-            className={`px-3 py-1.5 rounded-xl text-xs font-bold flex items-center gap-1.5 transition-all ${
-              isSaved
-                ? 'bg-[#151424] text-gray-400 border border-white/5 cursor-default'
-                : 'bg-gradient-to-r from-purple-600 to-violet-600 hover:from-purple-500 hover:to-violet-500 text-white shadow-[0_0_15px_rgba(147,51,234,0.4)] active:scale-95'
-            }`}
-          >
-            <Save size={14} />
-            <span className="hidden sm:inline">{saving ? 'Salvando...' : 'Salvar'}</span>
-          </button>
-
-          <button
-            onClick={() => setDownloadModalOpen(true)}
-            className="px-3.5 py-1.5 bg-gradient-to-r from-purple-600 to-violet-600 hover:from-purple-500 hover:to-violet-500 text-white font-bold rounded-xl text-xs flex items-center gap-1.5 shadow-[0_2px_12px_rgba(147,51,234,0.35)] transition-all active:scale-95"
-            title="Baixar Biosite"
-          >
-            <Download size={14} />
-            <span>Baixar Biosite</span>
-          </button>
+        {/* Right: State Machine Actions (Salvar & Baixar) */}
+        <div className="flex items-center gap-2">
+          {/* Error State */}
+          {saveError ? (
+            <div className="flex items-center gap-1.5">
+              <span className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-xl bg-rose-500/15 border border-rose-500/30 text-rose-300 text-xs font-semibold">
+                <AlertCircle size={13} className="text-rose-400" />
+                <span className="hidden sm:inline">NÃO FOI POSSÍVEL SALVAR</span>
+              </span>
+              <button
+                onClick={handleSaveProject}
+                disabled={saving}
+                className="px-3 py-1.5 bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold rounded-xl transition-all"
+              >
+                TENTAR NOVAMENTE
+              </button>
+            </div>
+          ) : isSaved ? (
+            /* Saved State -> Show "✓ ALTERAÇÕES SALVAS" and prominent "BAIXAR BIOSITE ↓" */
+            <div className="flex items-center gap-2">
+              <span className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-xl bg-emerald-500/15 border border-emerald-500/30 text-emerald-400 text-xs font-semibold">
+                <Check size={13} className="stroke-[3]" />
+                <span className="hidden sm:inline">ALTERAÇÕES SALVAS</span>
+              </span>
+              <button
+                onClick={() => setDownloadModalOpen(true)}
+                className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white text-xs font-bold shadow-[0_0_20px_rgba(16,185,129,0.35)] transition-all active:scale-95"
+              >
+                <Download size={14} />
+                <span>BAIXAR BIOSITE ↓</span>
+              </button>
+            </div>
+          ) : (
+            /* Unsaved State -> Show "ALTERAÇÕES NÃO SALVAS" and "SALVAR ALTERAÇÕES" */
+            <div className="flex items-center gap-2">
+              <span className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl bg-amber-500/15 border border-amber-500/30 text-amber-300 text-xs font-semibold">
+                <span className="w-2 h-2 rounded-full bg-amber-400 animate-ping" />
+                <span className="hidden sm:inline">ALTERAÇÕES NÃO SALVAS</span>
+              </span>
+              <button
+                onClick={handleSaveProject}
+                disabled={saving}
+                className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl bg-gradient-to-r from-purple-600 to-violet-600 hover:from-purple-500 hover:to-violet-500 text-white text-xs font-bold shadow-[0_0_20px_rgba(168,85,247,0.4)] transition-all active:scale-95 disabled:opacity-50"
+              >
+                {saving ? (
+                  <>
+                    <div className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                    <span>SALVANDO...</span>
+                  </>
+                ) : (
+                  <>
+                    <Save size={14} />
+                    <span>SALVAR ALTERAÇÕES</span>
+                  </>
+                )}
+              </button>
+            </div>
+          )}
         </div>
       </header>
 
@@ -574,7 +873,6 @@ export const BiositeEditor: React.FC<BiositeEditorProps> = ({
           SPLIT LAYOUT: LEFT CONTROLS | RIGHT LIVE PREVIEW
          ───────────────────────────────────────────────────────── */}
       <div className="flex-1 flex overflow-hidden">
-        
         {/* ════════════════════════════════════════════════════════
             LEFT COLUMN: DYNAMIC ACCORDION EDITOR
            ════════════════════════════════════════════════════════ */}
@@ -599,9 +897,8 @@ export const BiositeEditor: React.FC<BiositeEditorProps> = ({
             </button>
           </div>
 
-          <div className="p-4 space-y-3.5">
-            
-            {/* 1. SEÇÃO: IDENTIDADE (NOME & LOGOMARCA) */}
+          <div className="p-4 space-y-3.5 pb-20">
+            {/* 1. SEÇÃO: IDENTIDADE (NOME, LOGOMARCA & TAMANHO) */}
             <div className="bg-[#0e0d1a] border border-purple-500/20 rounded-2xl overflow-hidden transition-all">
               <button
                 onClick={() => toggleAccordion('identidade')}
@@ -616,25 +913,34 @@ export const BiositeEditor: React.FC<BiositeEditorProps> = ({
                     <p className="text-[11px] text-gray-400">Nome da empresa e logomarca principal</p>
                   </div>
                 </div>
-                {openAccordions.identidade ? <ChevronDown size={16} className="text-purple-400" /> : <ChevronRight size={16} className="text-gray-500" />}
+                {openAccordions.identidade ? (
+                  <ChevronDown size={16} className="text-purple-400" />
+                ) : (
+                  <ChevronRight size={16} className="text-gray-500" />
+                )}
               </button>
 
               {openAccordions.identidade && (
                 <div className="p-4 pt-1 space-y-4 border-t border-purple-500/10">
-                  
                   {/* Nome da Empresa */}
                   <div className="space-y-1.5">
                     <label className="text-xs font-bold text-gray-200 block uppercase tracking-tight">
                       Nome da Empresa
                     </label>
                     <div className="text-[11px] text-gray-400 bg-[#07060f] px-2.5 py-1 rounded-md border border-white/5">
-                      Atual: <span className="text-purple-300 font-semibold">{template.fields.find(f => f.id === 'nome_empresa')?.originalValue || companyName}</span>
+                      Atual:{' '}
+                      <span className="text-purple-300 font-semibold">
+                        {template.fields.find((f) => f.id === 'nome_empresa')?.originalValue ||
+                          companyName}
+                      </span>
                     </div>
                     <input
                       id="field-input-nome_empresa"
                       type="text"
                       value={customValues['nome_empresa'] ?? ''}
-                      onChange={(e) => handleFieldChange('nome_empresa', e.target.value)}
+                      onChange={(e) => {
+                        handleFieldChange('nome_empresa', e.target.value);
+                      }}
                       onFocus={() => notifyIframeToFocus('nome_empresa')}
                       placeholder="Ex: BLACK CROWN BARBER CLUB"
                       className="w-full bg-[#07060f] border border-purple-500/30 rounded-xl px-3 py-2 text-xs text-white placeholder-gray-500 focus:outline-none focus:border-purple-500 focus:ring-1 focus:ring-purple-500"
@@ -642,28 +948,31 @@ export const BiositeEditor: React.FC<BiositeEditorProps> = ({
                   </div>
 
                   {/* Logomarca */}
-                  <div className="space-y-2 pt-2 border-t border-white/5">
+                  <div className="space-y-3 pt-2 border-t border-white/5">
                     <div className="flex items-center justify-between">
                       <label className="text-xs font-bold text-gray-200 uppercase tracking-tight">
                         Logomarca
                       </label>
-                      {customValues['logo'] && customValues['logo'] !== template.fields.find(f => f.id === 'logo')?.originalValue && (
-                        <button
-                          onClick={() => {
-                            const orig = template.fields.find(f => f.id === 'logo')?.originalValue || '';
-                            handleFieldChange('logo', orig);
-                          }}
-                          className="text-[10px] text-purple-400 hover:text-purple-300 flex items-center gap-1"
-                        >
-                          <RotateCcw size={10} />
-                          <span>Restaurar Original</span>
-                        </button>
-                      )}
+                      {customValues['logo'] &&
+                        customValues['logo'] !==
+                          template.fields.find((f) => f.id === 'logo')?.originalValue && (
+                          <button
+                            onClick={() => {
+                              const orig =
+                                template.fields.find((f) => f.id === 'logo')?.originalValue || '';
+                              handleFieldChange('logo', orig);
+                            }}
+                            className="text-[10px] text-purple-400 hover:text-purple-300 flex items-center gap-1"
+                          >
+                            <RotateCcw size={10} />
+                            <span>Restaurar Original</span>
+                          </button>
+                        )}
                     </div>
 
                     {/* Logo Active Preview */}
                     <div className="flex items-center gap-3 bg-[#07060f] p-2.5 rounded-xl border border-purple-500/20">
-                      <div className="w-16 h-16 rounded-xl bg-[#12111d] border border-purple-500/30 p-1 flex items-center justify-center overflow-hidden shrink-0">
+                      <div className="w-16 h-16 rounded-xl bg-[#12111d] border border-purple-500/30 p-1 flex items-center justify-center overflow-hidden shrink-0 relative bg-[radial-gradient(#222_1px,transparent_1px)] [background-size:8px_8px]">
                         {customValues['logo'] ? (
                           <img
                             src={customValues['logo']}
@@ -676,16 +985,39 @@ export const BiositeEditor: React.FC<BiositeEditorProps> = ({
                       </div>
                       <div className="text-[11px] text-gray-400 space-y-1">
                         <span className="text-emerald-400 font-semibold flex items-center gap-1">
-                          <Check size={11} /> 1 Logo ativa
+                          <Check size={11} /> 1 Logo ativa no biosite
                         </span>
                         <p className="text-[10px] text-gray-400 leading-tight">
-                          Aceita PNG transparente, JPG, WEBP e SVG. Sem cortes ou fundos brancos forçados.
+                          Upload ou link direto. O biosite sempre exibe apenas uma logo oficial.
                         </p>
                       </div>
                     </div>
 
-                    {/* Upload button */}
-                    <label className="flex items-center justify-center gap-2 w-full py-2 px-3 bg-[#131122] hover:bg-[#1a1730] border border-dashed border-purple-500/40 rounded-xl text-xs text-purple-300 font-semibold cursor-pointer transition-colors">
+                    {/* Tamanho da Logo */}
+                    <div className="space-y-1.5">
+                      <span className="text-[10px] text-gray-400 uppercase font-mono block">
+                        Tamanho da Logo:
+                      </span>
+                      <div className="grid grid-cols-3 gap-2">
+                        {(['sm', 'md', 'lg'] as const).map((s) => (
+                          <button
+                            key={s}
+                            type="button"
+                            onClick={() => handleLogoConfigChange({ size: s })}
+                            className={`py-1.5 text-xs font-semibold rounded-xl border transition-all ${
+                              logoConfig.size === s
+                                ? 'bg-purple-600 text-white border-purple-400 shadow-sm'
+                                : 'bg-[#12111d] text-gray-400 hover:text-white border-white/5'
+                            }`}
+                          >
+                            {s === 'sm' ? 'Pequeno' : s === 'md' ? 'Médio (Padrão)' : 'Grande'}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+
+                    {/* Upload button with background detection modal */}
+                    <label className="flex items-center justify-center gap-2 w-full py-2.5 px-3 bg-[#131122] hover:bg-[#1a1730] border border-dashed border-purple-500/40 rounded-xl text-xs text-purple-300 font-semibold cursor-pointer transition-colors">
                       <Upload size={14} />
                       <span>Fazer Upload da Logo</span>
                       <input
@@ -698,7 +1030,9 @@ export const BiositeEditor: React.FC<BiositeEditorProps> = ({
 
                     {/* URL Option */}
                     <div className="space-y-1.5 pt-1">
-                      <span className="text-[10px] text-gray-400 uppercase font-mono block">Ou link direto da imagem:</span>
+                      <span className="text-[10px] text-gray-400 uppercase font-mono block">
+                        Ou link direto da imagem:
+                      </span>
                       <div className="flex gap-1.5">
                         <input
                           type="url"
@@ -729,12 +1063,244 @@ export const BiositeEditor: React.FC<BiositeEditorProps> = ({
                       )}
                     </div>
                   </div>
-
                 </div>
               )}
             </div>
 
-            {/* 2. SEÇÃO: TEXTOS (HEADLINE, SUBTÍTULO, SLOGANS) */}
+            {/* 2. SEÇÃO: CORES & APARÊNCIA */}
+            <div className="bg-[#0e0d1a] border border-purple-500/20 rounded-2xl overflow-hidden transition-all">
+              <button
+                onClick={() => toggleAccordion('cores')}
+                className="w-full p-3.5 flex items-center justify-between text-left hover:bg-[#141224] transition-colors"
+              >
+                <div className="flex items-center gap-2">
+                  <div className="w-6 h-6 rounded-lg bg-indigo-900/50 flex items-center justify-center text-indigo-300">
+                    <Palette size={14} />
+                  </div>
+                  <div>
+                    <h3 className="text-xs font-bold text-white uppercase tracking-wider">
+                      Cores & Aparência
+                    </h3>
+                    <p className="text-[11px] text-gray-400">Paletas prontas e variáveis CSS do tema</p>
+                  </div>
+                </div>
+                {openAccordions.cores ? (
+                  <ChevronDown size={16} className="text-purple-400" />
+                ) : (
+                  <ChevronRight size={16} className="text-gray-500" />
+                )}
+              </button>
+
+              {openAccordions.cores && (
+                <div className="p-4 pt-1 space-y-4 border-t border-purple-500/10">
+                  {/* Paletas Prontas */}
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between">
+                      <label className="text-xs font-bold text-gray-200 uppercase tracking-tight">
+                        Paletas Prontas
+                      </label>
+                      <button
+                        onClick={handleRestoreOriginalColors}
+                        className="text-[10px] text-purple-400 hover:text-purple-300 flex items-center gap-1"
+                      >
+                        <RotateCcw size={10} />
+                        <span>Restaurar Cores Originais</span>
+                      </button>
+                    </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                      {READY_PALETTES.map((pal) => {
+                        const isSelected = selectedPalette === pal.id;
+                        return (
+                          <button
+                            key={pal.id}
+                            type="button"
+                            onClick={() => handleSelectPalette(pal.id)}
+                            className={`p-2.5 rounded-xl border text-left flex items-center justify-between transition-all ${
+                              isSelected
+                                ? 'bg-purple-950/40 border-purple-500 shadow-[0_0_12px_rgba(168,85,247,0.3)]'
+                                : 'bg-[#07060f] border-white/5 hover:border-purple-500/30'
+                            }`}
+                          >
+                            <span className="text-xs font-semibold text-gray-200 truncate pr-2">
+                              {pal.name}
+                            </span>
+                            <div className="flex items-center -space-x-1 shrink-0">
+                              <span
+                                className="w-4 h-4 rounded-full border border-black/50 shadow-sm"
+                                style={{ backgroundColor: pal.colors.primary }}
+                              />
+                              <span
+                                className="w-4 h-4 rounded-full border border-black/50 shadow-sm"
+                                style={{ backgroundColor: pal.colors.secondary }}
+                              />
+                              <span
+                                className="w-4 h-4 rounded-full border border-black/50 shadow-sm"
+                                style={{ backgroundColor: pal.colors.bg }}
+                              />
+                            </div>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                  {/* Personalizar Cores Individuais */}
+                  <div className="space-y-2.5 pt-3 border-t border-white/5">
+                    <label className="text-xs font-bold text-gray-200 uppercase tracking-tight block">
+                      Personalizar Cores
+                    </label>
+
+                    <div className="grid grid-cols-2 gap-2.5">
+                      {/* Cor Principal */}
+                      <div className="bg-[#07060f] p-2.5 rounded-xl border border-purple-500/20 space-y-1.5">
+                        <span className="text-[10px] text-gray-400 font-mono block">COR PRINCIPAL</span>
+                        <div className="flex items-center gap-2">
+                          <input
+                            type="color"
+                            value={customColors.primary || '#d97706'}
+                            onChange={(e) => handleColorChange('primary', e.target.value)}
+                            className="w-8 h-8 rounded-lg cursor-pointer bg-transparent border-0"
+                          />
+                          <span className="text-xs font-mono text-gray-300">
+                            {customColors.primary || '#d97706'}
+                          </span>
+                        </div>
+                      </div>
+
+                      {/* Cor Secundária */}
+                      <div className="bg-[#07060f] p-2.5 rounded-xl border border-purple-500/20 space-y-1.5">
+                        <span className="text-[10px] text-gray-400 font-mono block">COR SECUNDÁRIA</span>
+                        <div className="flex items-center gap-2">
+                          <input
+                            type="color"
+                            value={customColors.secondary || '#9333ea'}
+                            onChange={(e) => handleColorChange('secondary', e.target.value)}
+                            className="w-8 h-8 rounded-lg cursor-pointer bg-transparent border-0"
+                          />
+                          <span className="text-xs font-mono text-gray-300">
+                            {customColors.secondary || '#9333ea'}
+                          </span>
+                        </div>
+                      </div>
+
+                      {/* Fundo */}
+                      <div className="bg-[#07060f] p-2.5 rounded-xl border border-purple-500/20 space-y-1.5">
+                        <span className="text-[10px] text-gray-400 font-mono block">FUNDO (BG)</span>
+                        <div className="flex items-center gap-2">
+                          <input
+                            type="color"
+                            value={customColors.bg || '#08080c'}
+                            onChange={(e) => handleColorChange('bg', e.target.value)}
+                            className="w-8 h-8 rounded-lg cursor-pointer bg-transparent border-0"
+                          />
+                          <span className="text-xs font-mono text-gray-300">
+                            {customColors.bg || '#08080c'}
+                          </span>
+                        </div>
+                      </div>
+
+                      {/* Textos */}
+                      <div className="bg-[#07060f] p-2.5 rounded-xl border border-purple-500/20 space-y-1.5">
+                        <span className="text-[10px] text-gray-400 font-mono block">TEXTOS</span>
+                        <div className="flex items-center gap-2">
+                          <input
+                            type="color"
+                            value={customColors.text || '#ffffff'}
+                            onChange={(e) => handleColorChange('text', e.target.value)}
+                            className="w-8 h-8 rounded-lg cursor-pointer bg-transparent border-0"
+                          />
+                          <span className="text-xs font-mono text-gray-300">
+                            {customColors.text || '#ffffff'}
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* 3. SEÇÃO: ESTILO DOS ÍCONES */}
+            <div className="bg-[#0e0d1a] border border-purple-500/20 rounded-2xl overflow-hidden transition-all">
+              <button
+                onClick={() => toggleAccordion('icones')}
+                className="w-full p-3.5 flex items-center justify-between text-left hover:bg-[#141224] transition-colors"
+              >
+                <div className="flex items-center gap-2">
+                  <div className="w-6 h-6 rounded-lg bg-pink-900/50 flex items-center justify-center text-pink-300">
+                    <Sparkles size={14} />
+                  </div>
+                  <div>
+                    <h3 className="text-xs font-bold text-white uppercase tracking-wider">
+                      Estilo dos Ícones
+                    </h3>
+                    <p className="text-[11px] text-gray-400">Minimal, Glass, 3D, Brilhante ou Neon</p>
+                  </div>
+                </div>
+                {openAccordions.icones ? (
+                  <ChevronDown size={16} className="text-purple-400" />
+                ) : (
+                  <ChevronRight size={16} className="text-gray-500" />
+                )}
+              </button>
+
+              {openAccordions.icones && (
+                <div className="p-4 pt-1 space-y-3.5 border-t border-purple-500/10">
+                  <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5">
+                    {[
+                      { id: 'original', label: 'Original', desc: 'Padrão do Modelo' },
+                      { id: 'minimal', label: 'Minimal', desc: 'Flat sem relevo' },
+                      { id: 'glass', label: 'Glass', desc: 'Vidro translúcido' },
+                      { id: '3d', label: '3D Alto-Relevo', desc: 'Bisel e profundidade' },
+                      { id: 'brilliant', label: 'Brilhante', desc: 'Reflexo e brilho' },
+                      { id: 'neon', label: 'Neon Glow', desc: 'Iluminação neon' },
+                    ].map((st) => {
+                      const isSelected = iconStyle === st.id;
+                      return (
+                        <button
+                          key={st.id}
+                          type="button"
+                          onClick={() => handleIconStyleChange(st.id as IconStyleType)}
+                          className={`p-2.5 rounded-xl border flex flex-col items-center justify-center text-center gap-1.5 transition-all ${
+                            isSelected
+                              ? 'bg-purple-900/40 border-purple-500 shadow-[0_0_15px_rgba(168,85,247,0.35)]'
+                              : 'bg-[#07060f] border-white/5 hover:border-purple-500/30'
+                          }`}
+                        >
+                          {/* Visual sample button */}
+                          <div
+                            className={`w-10 h-10 rounded-xl flex items-center justify-center text-white ${
+                              st.id === 'minimal'
+                                ? 'bg-white/5 border border-white/10'
+                                : st.id === 'glass'
+                                ? 'bg-white/10 backdrop-blur border border-white/30 shadow-lg'
+                                : st.id === '3d'
+                                ? 'bg-gradient-to-b from-[#252338] to-[#12111d] border border-white/10 shadow-[0_4px_0_#0a0912]'
+                                : st.id === 'brilliant'
+                                ? 'bg-gradient-to-tr from-white/20 to-white/5 border border-white/40 shadow-[0_0_10px_rgba(255,255,255,0.3)]'
+                                : st.id === 'neon'
+                                ? 'bg-[#0e0c1a] border border-purple-400 text-purple-300 shadow-[0_0_12px_rgba(168,85,247,0.6)]'
+                                : 'bg-[#181628] border border-purple-500/30'
+                            }`}
+                          >
+                            <InstagramIcon size={18} />
+                          </div>
+                          <span className="text-xs font-bold text-gray-200">{st.label}</span>
+                          <span className="text-[10px] text-gray-500">{st.desc}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+
+                  <p className="text-[10px] text-gray-400 text-center">
+                    ✓ Aplicado a todos os botões de redes sociais e contatos do biosite.
+                  </p>
+                </div>
+              )}
+            </div>
+
+            {/* 4. SEÇÃO: TEXTOS PRINCIPAIS */}
             <div className="bg-[#0e0d1a] border border-purple-500/20 rounded-2xl overflow-hidden transition-all">
               <button
                 onClick={() => toggleAccordion('textos')}
@@ -745,23 +1311,32 @@ export const BiositeEditor: React.FC<BiositeEditorProps> = ({
                     <Type size={14} />
                   </div>
                   <div>
-                    <h3 className="text-xs font-bold text-white uppercase tracking-wider">Textos Principais</h3>
+                    <h3 className="text-xs font-bold text-white uppercase tracking-wider">
+                      Textos Principais
+                    </h3>
                     <p className="text-[11px] text-gray-400">Headline e chamada de apresentação</p>
                   </div>
                 </div>
-                {openAccordions.textos ? <ChevronDown size={16} className="text-purple-400" /> : <ChevronRight size={16} className="text-gray-500" />}
+                {openAccordions.textos ? (
+                  <ChevronDown size={16} className="text-purple-400" />
+                ) : (
+                  <ChevronRight size={16} className="text-gray-500" />
+                )}
               </button>
 
               {openAccordions.textos && (
                 <div className="p-4 pt-1 space-y-4 border-t border-purple-500/10">
-                  
                   {/* Headline */}
                   <div className="space-y-1.5">
                     <label className="text-xs font-bold text-gray-200 block uppercase tracking-tight">
                       Título Principal / Headline
                     </label>
                     <div className="text-[11px] text-gray-400 bg-[#07060f] px-2.5 py-1 rounded-md border border-white/5">
-                      Atual: <span className="text-purple-300 font-semibold">{template.fields.find(f => f.id === 'headline')?.originalValue || 'SEU ESTILO COMEÇA AQUI.'}</span>
+                      Atual:{' '}
+                      <span className="text-purple-300 font-semibold">
+                        {template.fields.find((f) => f.id === 'headline')?.originalValue ||
+                          'SEU ESTILO COMEÇA AQUI.'}
+                      </span>
                     </div>
                     <input
                       id="field-input-headline"
@@ -772,7 +1347,6 @@ export const BiositeEditor: React.FC<BiositeEditorProps> = ({
                       placeholder="Ex: SEU ESTILO COMEÇA AQUI."
                       className="w-full bg-[#07060f] border border-purple-500/30 rounded-xl px-3 py-2 text-xs text-white placeholder-gray-500 focus:outline-none focus:border-purple-500 focus:ring-1 focus:ring-purple-500"
                     />
-                    <p className="text-[10px] text-gray-500">Texto de destaque no topo do biosite.</p>
                   </div>
 
                   {/* Subtítulo */}
@@ -781,7 +1355,11 @@ export const BiositeEditor: React.FC<BiositeEditorProps> = ({
                       Subtítulo / Descrição
                     </label>
                     <div className="text-[11px] text-gray-400 bg-[#07060f] px-2.5 py-1 rounded-md border border-white/5">
-                      Atual: <span className="text-purple-300 font-semibold">{template.fields.find(f => f.id === 'subtitulo')?.originalValue || 'Precisão, personalidade e cuidado em cada detalhe.'}</span>
+                      Atual:{' '}
+                      <span className="text-purple-300 font-semibold">
+                        {template.fields.find((f) => f.id === 'subtitulo')?.originalValue ||
+                          'Precisão, personalidade e cuidado em cada detalhe.'}
+                      </span>
                     </div>
                     <textarea
                       id="field-input-subtitulo"
@@ -793,12 +1371,11 @@ export const BiositeEditor: React.FC<BiositeEditorProps> = ({
                       className="w-full bg-[#07060f] border border-purple-500/30 rounded-xl px-3 py-2 text-xs text-white placeholder-gray-500 focus:outline-none focus:border-purple-500 focus:ring-1 focus:ring-purple-500 resize-none"
                     />
                   </div>
-
                 </div>
               )}
             </div>
 
-            {/* 3. SEÇÃO: ESPECIALIDADES / SERVIÇOS (6 ITENS REPETÍVEIS) */}
+            {/* 5. SEÇÃO: ESPECIALIDADES / SERVIÇOS */}
             {specialtyIndexes.length > 0 && (
               <div className="bg-[#0e0d1a] border border-purple-500/20 rounded-2xl overflow-hidden transition-all">
                 <button
@@ -816,7 +1393,11 @@ export const BiositeEditor: React.FC<BiositeEditorProps> = ({
                       <p className="text-[11px] text-gray-400">Serviços com foto, nome, descrição e preço</p>
                     </div>
                   </div>
-                  {openAccordions.especialidades ? <ChevronDown size={16} className="text-purple-400" /> : <ChevronRight size={16} className="text-gray-500" />}
+                  {openAccordions.especialidades ? (
+                    <ChevronDown size={16} className="text-purple-400" />
+                  ) : (
+                    <ChevronRight size={16} className="text-gray-500" />
+                  )}
                 </button>
 
                 {openAccordions.especialidades && (
@@ -838,11 +1419,9 @@ export const BiositeEditor: React.FC<BiositeEditorProps> = ({
                           id={`field-input-esp_${idx}_card`}
                           className="bg-[#07060f] p-3 rounded-xl border border-purple-500/20 space-y-2.5"
                         >
-                          <div className="flex items-center justify-between">
-                            <span className="text-xs font-bold text-purple-300 uppercase">
-                              #{idx} · {nameVal || `Item ${idx}`}
-                            </span>
-                          </div>
+                          <span className="text-xs font-bold text-purple-300 uppercase block">
+                            #{idx} · {nameVal || `Item ${idx}`}
+                          </span>
 
                           <div className="grid grid-cols-3 gap-2">
                             <div className="col-span-2 space-y-1">
@@ -908,7 +1487,7 @@ export const BiositeEditor: React.FC<BiositeEditorProps> = ({
               </div>
             )}
 
-            {/* 4. SEÇÃO: GALERIA DE FOTOS / CARROSSEL (5 FOTOS) */}
+            {/* 6. SEÇÃO: GALERIA DE FOTOS */}
             {galleryFieldIds.length > 0 && (
               <div className="bg-[#0e0d1a] border border-purple-500/20 rounded-2xl overflow-hidden transition-all">
                 <button
@@ -926,7 +1505,11 @@ export const BiositeEditor: React.FC<BiositeEditorProps> = ({
                       <p className="text-[11px] text-gray-400">Miniaturas e troca de imagens</p>
                     </div>
                   </div>
-                  {openAccordions.galeria ? <ChevronDown size={16} className="text-purple-400" /> : <ChevronRight size={16} className="text-gray-500" />}
+                  {openAccordions.galeria ? (
+                    <ChevronDown size={16} className="text-purple-400" />
+                  ) : (
+                    <ChevronRight size={16} className="text-gray-500" />
+                  )}
                 </button>
 
                 {openAccordions.galeria && (
@@ -975,7 +1558,7 @@ export const BiositeEditor: React.FC<BiositeEditorProps> = ({
               </div>
             )}
 
-            {/* 5. SEÇÃO: WHATSAPP (NÚMERO, MENSAGEM & BOTÃO DE TESTE) */}
+            {/* 7. SEÇÃO: WHATSAPP */}
             <div className="bg-[#0e0d1a] border border-purple-500/20 rounded-2xl overflow-hidden transition-all">
               <button
                 onClick={() => toggleAccordion('whatsapp')}
@@ -987,31 +1570,52 @@ export const BiositeEditor: React.FC<BiositeEditorProps> = ({
                   </div>
                   <div>
                     <h3 className="text-xs font-bold text-white uppercase tracking-wider">WhatsApp</h3>
-                    <p className="text-[11px] text-gray-400">Número direto, mensagem e link automático</p>
+                    <p className="text-[11px] text-gray-400">Número direto, mensagem e visibilidade</p>
                   </div>
                 </div>
-                {openAccordions.whatsapp ? <ChevronDown size={16} className="text-purple-400" /> : <ChevronRight size={16} className="text-gray-500" />}
+                {openAccordions.whatsapp ? (
+                  <ChevronDown size={16} className="text-purple-400" />
+                ) : (
+                  <ChevronRight size={16} className="text-gray-500" />
+                )}
               </button>
 
               {openAccordions.whatsapp && (
                 <div className="p-4 pt-1 space-y-4 border-t border-purple-500/10">
-                  
+                  {/* Toggle Mostrar no Biosite */}
+                  <div className="flex items-center justify-between p-2.5 bg-[#07060f] rounded-xl border border-white/5">
+                    <span className="text-xs font-semibold text-gray-200">Mostrar no Biosite:</span>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        handleSocialItemUpdate('whatsapp', {
+                          enabled: !socialsConfig.whatsapp?.enabled,
+                        })
+                      }
+                      className={`px-3 py-1 text-xs font-bold rounded-lg transition-all ${
+                        socialsConfig.whatsapp?.enabled
+                          ? 'bg-emerald-600 text-white'
+                          : 'bg-gray-800 text-gray-400'
+                      }`}
+                    >
+                      {socialsConfig.whatsapp?.enabled ? 'ATIVADO' : 'DESATIVADO'}
+                    </button>
+                  </div>
+
                   {/* Número WhatsApp */}
                   <div className="space-y-1.5">
                     <label className="text-xs font-bold text-gray-200 block uppercase tracking-tight">
                       Número do WhatsApp
                     </label>
-                    <div className="relative">
-                      <input
-                        id="field-input-whatsapp_phone"
-                        type="text"
-                        value={formatPhoneDisplay(whatsAppPhone)}
-                        onChange={(e) => handleWhatsAppChange(e.target.value, whatsAppMessage)}
-                        onFocus={() => notifyIframeToFocus('whatsapp')}
-                        placeholder="(31) 99999-9999"
-                        className="w-full bg-[#07060f] border border-purple-500/30 rounded-xl px-3 py-2 text-xs text-white placeholder-gray-500 focus:outline-none focus:border-purple-500 focus:ring-1 focus:ring-purple-500"
-                      />
-                    </div>
+                    <input
+                      id="field-input-whatsapp_phone"
+                      type="text"
+                      value={formatPhoneDisplay(whatsAppPhone)}
+                      onChange={(e) => handleWhatsAppChange(e.target.value, whatsAppMessage)}
+                      onFocus={() => notifyIframeToFocus('whatsapp')}
+                      placeholder="(31) 99999-9999"
+                      className="w-full bg-[#07060f] border border-purple-500/30 rounded-xl px-3 py-2 text-xs text-white placeholder-gray-500 focus:outline-none focus:border-purple-500 focus:ring-1 focus:ring-purple-500"
+                    />
                     <p className="text-[10px] text-gray-400">
                       Normalizado automaticamente para formato internacional (ex: 55{whatsAppPhone.replace(/\D/g, '')}).
                     </p>
@@ -1063,12 +1667,11 @@ export const BiositeEditor: React.FC<BiositeEditorProps> = ({
                       {buildWhatsAppUrl(whatsAppPhone, whatsAppMessage)}
                     </div>
                   </div>
-
                 </div>
               )}
             </div>
 
-            {/* 6. SEÇÃO: INSTAGRAM */}
+            {/* 8. SEÇÃO: REDES SOCIAIS (INSTAGRAM, FACEBOOK, TIKTOK, YOUTUBE) */}
             <div className="bg-[#0e0d1a] border border-purple-500/20 rounded-2xl overflow-hidden transition-all">
               <button
                 onClick={() => toggleAccordion('redes')}
@@ -1076,22 +1679,50 @@ export const BiositeEditor: React.FC<BiositeEditorProps> = ({
               >
                 <div className="flex items-center gap-2">
                   <div className="w-6 h-6 rounded-lg bg-pink-950 flex items-center justify-center text-pink-400">
-                    <InstagramIcon size={14} />
+                    <Share2 size={14} />
                   </div>
                   <div>
-                    <h3 className="text-xs font-bold text-white uppercase tracking-wider">Instagram Oficial</h3>
-                    <p className="text-[11px] text-gray-400">@usuario ou link do perfil</p>
+                    <h3 className="text-xs font-bold text-white uppercase tracking-wider">
+                      Redes Sociais
+                    </h3>
+                    <p className="text-[11px] text-gray-400">
+                      Instagram, Facebook, TikTok e YouTube
+                    </p>
                   </div>
                 </div>
-                {openAccordions.redes ? <ChevronDown size={16} className="text-purple-400" /> : <ChevronRight size={16} className="text-gray-500" />}
+                {openAccordions.redes ? (
+                  <ChevronDown size={16} className="text-purple-400" />
+                ) : (
+                  <ChevronRight size={16} className="text-gray-500" />
+                )}
               </button>
 
               {openAccordions.redes && (
-                <div className="p-4 pt-1 space-y-3.5 border-t border-purple-500/10">
-                  <div className="space-y-1.5">
-                    <label className="text-xs font-bold text-gray-200 block uppercase tracking-tight">
-                      Perfil do Instagram
-                    </label>
+                <div className="p-4 pt-1 space-y-4 border-t border-purple-500/10">
+                  {/* Instagram */}
+                  <div className="p-3 bg-[#07060f] rounded-xl border border-pink-500/20 space-y-2.5">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-2">
+                        <InstagramIcon size={14} className="text-pink-400" />
+                        <span className="text-xs font-bold text-white uppercase">Instagram</span>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          handleSocialItemUpdate('instagram', {
+                            enabled: !socialsConfig.instagram?.enabled,
+                          })
+                        }
+                        className={`px-2.5 py-0.5 text-[11px] font-bold rounded-lg transition-all ${
+                          socialsConfig.instagram?.enabled
+                            ? 'bg-pink-600 text-white'
+                            : 'bg-gray-800 text-gray-400'
+                        }`}
+                      >
+                        {socialsConfig.instagram?.enabled ? 'ATIVADO' : 'DESATIVADO'}
+                      </button>
+                    </div>
+
                     <input
                       id="field-input-instagram"
                       type="text"
@@ -1099,34 +1730,194 @@ export const BiositeEditor: React.FC<BiositeEditorProps> = ({
                       onChange={(e) => handleInstagramChange(e.target.value)}
                       onFocus={() => notifyIframeToFocus('instagram')}
                       placeholder="@blackcrownbarber"
-                      className="w-full bg-[#07060f] border border-purple-500/30 rounded-xl px-3 py-2 text-xs text-white placeholder-gray-500 focus:outline-none focus:border-purple-500"
+                      className="w-full bg-[#12111d] border border-purple-500/25 rounded-xl px-3 py-1.5 text-xs text-white placeholder-gray-500 focus:outline-none focus:border-purple-500"
                     />
-                    <p className="text-[10px] text-gray-400">
-                      Aceita @usuario, usuario ou URL completa. O ícone original no biosite permanece intacto.
-                    </p>
+
+                    {instagramInput && (
+                      <div className="flex items-center justify-between pt-1">
+                        <span className="text-[10px] text-purple-300 font-mono truncate max-w-[200px]">
+                          {normalizeInstagram(instagramInput).url}
+                        </span>
+                        <a
+                          href={normalizeInstagram(instagramInput).url}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="inline-flex items-center gap-1 text-[11px] text-pink-400 hover:text-pink-300 font-semibold"
+                        >
+                          <span>TESTAR LINK</span>
+                          <ExternalLink size={11} />
+                        </a>
+                      </div>
+                    )}
                   </div>
 
-                  {instagramInput && (
-                    <div className="flex items-center justify-between p-2.5 bg-[#07060f] rounded-xl border border-purple-500/20">
-                      <span className="text-xs text-purple-300 font-mono">
-                        {normalizeInstagram(instagramInput).url}
+                  {/* Facebook (se ativado ou adicionado) */}
+                  {socialsConfig.facebook?.enabled && (
+                    <div className="p-3 bg-[#07060f] rounded-xl border border-blue-500/20 space-y-2.5">
+                      <div className="flex items-center justify-between">
+                        <span className="text-xs font-bold text-blue-400 uppercase">Facebook</span>
+                        <button
+                          type="button"
+                          onClick={() => handleRemoveSocialNetwork('facebook')}
+                          className="text-[11px] text-rose-400 hover:text-rose-300 flex items-center gap-1"
+                        >
+                          <Trash2 size={11} /> Remover
+                        </button>
+                      </div>
+
+                      <input
+                        type="text"
+                        value={socialsConfig.facebook.url}
+                        onChange={(e) => {
+                          const norm = normalizeFacebook(e.target.value);
+                          handleSocialItemUpdate('facebook', { url: norm });
+                        }}
+                        placeholder="https://facebook.com/minhapagina"
+                        className="w-full bg-[#12111d] border border-purple-500/25 rounded-xl px-3 py-1.5 text-xs text-white placeholder-gray-500 focus:outline-none focus:border-purple-500"
+                      />
+
+                      {socialsConfig.facebook.url && (
+                        <div className="flex justify-end pt-1">
+                          <a
+                            href={socialsConfig.facebook.url}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="inline-flex items-center gap-1 text-[11px] text-blue-400 hover:text-blue-300 font-semibold"
+                          >
+                            <span>TESTAR LINK</span>
+                            <ExternalLink size={11} />
+                          </a>
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {/* TikTok (se ativado ou adicionado) */}
+                  {socialsConfig.tiktok?.enabled && (
+                    <div className="p-3 bg-[#07060f] rounded-xl border border-teal-500/20 space-y-2.5">
+                      <div className="flex items-center justify-between">
+                        <span className="text-xs font-bold text-teal-400 uppercase">TikTok</span>
+                        <button
+                          type="button"
+                          onClick={() => handleRemoveSocialNetwork('tiktok')}
+                          className="text-[11px] text-rose-400 hover:text-rose-300 flex items-center gap-1"
+                        >
+                          <Trash2 size={11} /> Remover
+                        </button>
+                      </div>
+
+                      <input
+                        type="text"
+                        value={socialsConfig.tiktok.url}
+                        onChange={(e) => {
+                          const norm = normalizeTikTok(e.target.value);
+                          handleSocialItemUpdate('tiktok', { url: norm.url });
+                        }}
+                        placeholder="@meutiktok ou https://tiktok.com/@meutiktok"
+                        className="w-full bg-[#12111d] border border-purple-500/25 rounded-xl px-3 py-1.5 text-xs text-white placeholder-gray-500 focus:outline-none focus:border-purple-500"
+                      />
+
+                      {socialsConfig.tiktok.url && (
+                        <div className="flex justify-end pt-1">
+                          <a
+                            href={socialsConfig.tiktok.url}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="inline-flex items-center gap-1 text-[11px] text-teal-400 hover:text-teal-300 font-semibold"
+                          >
+                            <span>TESTAR LINK</span>
+                            <ExternalLink size={11} />
+                          </a>
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {/* YouTube (se ativado ou adicionado) */}
+                  {socialsConfig.youtube?.enabled && (
+                    <div className="p-3 bg-[#07060f] rounded-xl border border-red-500/20 space-y-2.5">
+                      <div className="flex items-center justify-between">
+                        <span className="text-xs font-bold text-red-400 uppercase">YouTube</span>
+                        <button
+                          type="button"
+                          onClick={() => handleRemoveSocialNetwork('youtube')}
+                          className="text-[11px] text-rose-400 hover:text-rose-300 flex items-center gap-1"
+                        >
+                          <Trash2 size={11} /> Remover
+                        </button>
+                      </div>
+
+                      <input
+                        type="text"
+                        value={socialsConfig.youtube.url}
+                        onChange={(e) => {
+                          const norm = normalizeYouTube(e.target.value);
+                          handleSocialItemUpdate('youtube', { url: norm });
+                        }}
+                        placeholder="https://youtube.com/@meucanal"
+                        className="w-full bg-[#12111d] border border-purple-500/25 rounded-xl px-3 py-1.5 text-xs text-white placeholder-gray-500 focus:outline-none focus:border-purple-500"
+                      />
+
+                      {socialsConfig.youtube.url && (
+                        <div className="flex justify-end pt-1">
+                          <a
+                            href={socialsConfig.youtube.url}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="inline-flex items-center gap-1 text-[11px] text-red-400 hover:text-red-300 font-semibold"
+                          >
+                            <span>TESTAR LINK</span>
+                            <ExternalLink size={11} />
+                          </a>
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Botão + ADICIONAR REDE SOCIAL */}
+                  {(!socialsConfig.facebook?.enabled ||
+                    !socialsConfig.tiktok?.enabled ||
+                    !socialsConfig.youtube?.enabled) && (
+                    <div className="pt-2">
+                      <span className="text-[10px] text-gray-400 font-mono block mb-1.5 uppercase">
+                        + Adicionar Rede Social:
                       </span>
-                      <a
-                        href={normalizeInstagram(instagramInput).url}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="inline-flex items-center gap-1 px-2.5 py-1 bg-[#1a172c] hover:bg-purple-600 text-purple-200 hover:text-white rounded-lg text-xs font-bold border border-purple-500/30 transition-all"
-                      >
-                        <span>TESTAR INSTAGRAM</span>
-                        <ExternalLink size={12} />
-                      </a>
+                      <div className="flex flex-wrap gap-2">
+                        {!socialsConfig.facebook?.enabled && (
+                          <button
+                            type="button"
+                            onClick={() => handleAddSocialNetwork('facebook')}
+                            className="px-2.5 py-1.5 bg-[#141224] hover:bg-[#1d1a33] text-blue-300 text-xs font-semibold rounded-xl border border-blue-500/30 flex items-center gap-1 transition-all"
+                          >
+                            <Plus size={12} /> Facebook
+                          </button>
+                        )}
+                        {!socialsConfig.tiktok?.enabled && (
+                          <button
+                            type="button"
+                            onClick={() => handleAddSocialNetwork('tiktok')}
+                            className="px-2.5 py-1.5 bg-[#141224] hover:bg-[#1d1a33] text-teal-300 text-xs font-semibold rounded-xl border border-teal-500/30 flex items-center gap-1 transition-all"
+                          >
+                            <Plus size={12} /> TikTok
+                          </button>
+                        )}
+                        {!socialsConfig.youtube?.enabled && (
+                          <button
+                            type="button"
+                            onClick={() => handleAddSocialNetwork('youtube')}
+                            className="px-2.5 py-1.5 bg-[#141224] hover:bg-[#1d1a33] text-red-300 text-xs font-semibold rounded-xl border border-red-500/30 flex items-center gap-1 transition-all"
+                          >
+                            <Plus size={12} /> YouTube
+                          </button>
+                        )}
+                      </div>
                     </div>
                   )}
                 </div>
               )}
             </div>
 
-            {/* 7. SEÇÃO: LOCALIZAÇÃO & GOOGLE MAPS */}
+            {/* 9. SEÇÃO: LOCALIZAÇÃO & ENDEREÇO */}
             <div className="bg-[#0e0d1a] border border-purple-500/20 rounded-2xl overflow-hidden transition-all">
               <button
                 onClick={() => toggleAccordion('localizacao')}
@@ -1137,24 +1928,25 @@ export const BiositeEditor: React.FC<BiositeEditorProps> = ({
                     <MapPin size={14} />
                   </div>
                   <div>
-                    <h3 className="text-xs font-bold text-white uppercase tracking-wider">Localização & Endereço</h3>
+                    <h3 className="text-xs font-bold text-white uppercase tracking-wider">
+                      Localização & Endereço
+                    </h3>
                     <p className="text-[11px] text-gray-400">Endereço textual e link do Google Maps</p>
                   </div>
                 </div>
-                {openAccordions.localizacao ? <ChevronDown size={16} className="text-purple-400" /> : <ChevronRight size={16} className="text-gray-500" />}
+                {openAccordions.localizacao ? (
+                  <ChevronDown size={16} className="text-purple-400" />
+                ) : (
+                  <ChevronRight size={16} className="text-gray-500" />
+                )}
               </button>
 
               {openAccordions.localizacao && (
                 <div className="p-4 pt-1 space-y-4 border-t border-purple-500/10">
-                  
-                  {/* Endereço Texto */}
                   <div className="space-y-1.5">
                     <label className="text-xs font-bold text-gray-200 block uppercase tracking-tight">
                       Endereço Exibido no Site
                     </label>
-                    <div className="text-[11px] text-gray-400 bg-[#07060f] px-2.5 py-1 rounded-md border border-white/5">
-                      Atual: <span className="text-purple-300 font-semibold">{template.fields.find(f => f.id === 'endereco')?.originalValue || 'Av. Imperial, 725 — Centro — Belo Horizonte/MG'}</span>
-                    </div>
                     <input
                       id="field-input-endereco"
                       type="text"
@@ -1166,7 +1958,6 @@ export const BiositeEditor: React.FC<BiositeEditorProps> = ({
                     />
                   </div>
 
-                  {/* Link Maps */}
                   <div className="space-y-1.5 pt-2 border-t border-white/5">
                     <div className="flex items-center justify-between">
                       <label className="text-xs font-bold text-gray-200 block uppercase tracking-tight">
@@ -1194,12 +1985,11 @@ export const BiositeEditor: React.FC<BiositeEditorProps> = ({
                       className="w-full bg-[#07060f] border border-purple-500/30 rounded-xl px-3 py-2 text-xs text-white placeholder-gray-500 focus:outline-none focus:border-purple-500"
                     />
                   </div>
-
                 </div>
               )}
             </div>
 
-            {/* 8. SEÇÃO: GOOGLE REVIEW (AVALIAÇÃO) */}
+            {/* 10. SEÇÃO: GOOGLE REVIEW */}
             <div className="bg-[#0e0d1a] border border-purple-500/20 rounded-2xl overflow-hidden transition-all">
               <button
                 onClick={() => toggleAccordion('google_review')}
@@ -1210,11 +2000,17 @@ export const BiositeEditor: React.FC<BiositeEditorProps> = ({
                     <Star size={14} />
                   </div>
                   <div>
-                    <h3 className="text-xs font-bold text-white uppercase tracking-wider">Avaliação Google</h3>
+                    <h3 className="text-xs font-bold text-white uppercase tracking-wider">
+                      Avaliação Google
+                    </h3>
                     <p className="text-[11px] text-gray-400">Link para coletar avaliações 5 estrelas</p>
                   </div>
                 </div>
-                {openAccordions.google_review ? <ChevronDown size={16} className="text-purple-400" /> : <ChevronRight size={16} className="text-gray-500" />}
+                {openAccordions.google_review ? (
+                  <ChevronDown size={16} className="text-purple-400" />
+                ) : (
+                  <ChevronRight size={16} className="text-gray-500" />
+                )}
               </button>
 
               {openAccordions.google_review && (
@@ -1245,15 +2041,12 @@ export const BiositeEditor: React.FC<BiositeEditorProps> = ({
                       placeholder="https://g.page/r/.../review"
                       className="w-full bg-[#07060f] border border-purple-500/30 rounded-xl px-3 py-2 text-xs text-white placeholder-gray-500 focus:outline-none focus:border-purple-500"
                     />
-                    <p className="text-[10px] text-gray-400">
-                      Preserva as estrelas, cores oficiais e visual 3D do botão no biosite.
-                    </p>
                   </div>
                 </div>
               )}
             </div>
 
-            {/* 9. SEÇÃO: HORÁRIOS */}
+            {/* 11. SEÇÃO: HORÁRIOS */}
             <div className="bg-[#0e0d1a] border border-purple-500/20 rounded-2xl overflow-hidden transition-all">
               <button
                 onClick={() => toggleAccordion('horarios')}
@@ -1268,7 +2061,11 @@ export const BiositeEditor: React.FC<BiositeEditorProps> = ({
                     <p className="text-[11px] text-gray-400">Dias e horários de funcionamento</p>
                   </div>
                 </div>
-                {openAccordions.horarios ? <ChevronDown size={16} className="text-purple-400" /> : <ChevronRight size={16} className="text-gray-500" />}
+                {openAccordions.horarios ? (
+                  <ChevronDown size={16} className="text-purple-400" />
+                ) : (
+                  <ChevronRight size={16} className="text-gray-500" />
+                )}
               </button>
 
               {openAccordions.horarios && (
@@ -1290,7 +2087,6 @@ export const BiositeEditor: React.FC<BiositeEditorProps> = ({
                 </div>
               )}
             </div>
-
           </div>
         </aside>
 
@@ -1310,7 +2106,7 @@ export const BiositeEditor: React.FC<BiositeEditorProps> = ({
                 : 'w-full h-full rounded-2xl border border-purple-500/20 bg-black shadow-2xl'
             }`}
           >
-            {/* Top Phone Notch / Speaker bar (Only on Mobile View) */}
+            {/* Top Phone Notch (Only on Mobile View) */}
             {deviceView === 'mobile' && (
               <div className="h-5 bg-[#0a0a0f] flex items-center justify-center shrink-0 border-b border-white/5">
                 <div className="w-16 h-1 rounded-full bg-white/20" />
@@ -1330,12 +2126,119 @@ export const BiositeEditor: React.FC<BiositeEditorProps> = ({
       </div>
 
       {/* ─────────────────────────────────────────────────────────
+          LOGO PREVIEW & BACKGROUND REMOVAL MODAL
+         ───────────────────────────────────────────────────────── */}
+      {logoModalOpen && (
+        <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-md flex items-center justify-center p-4">
+          <div className="w-full max-w-lg bg-[#0e0d1c] border border-purple-500/30 rounded-3xl p-6 shadow-[0_20px_60px_rgba(0,0,0,0.95)] space-y-5 animate-in fade-in zoom-in-95">
+            <div className="flex items-center justify-between border-b border-purple-500/20 pb-3">
+              <div className="flex items-center gap-2">
+                <div className="w-7 h-7 rounded-xl bg-purple-600/30 flex items-center justify-center text-purple-300">
+                  <ImageIcon size={16} />
+                </div>
+                <div>
+                  <h3 className="text-sm font-bold text-white">Preview da Logomarca</h3>
+                  <p className="text-[11px] text-gray-400">Verifique a transparência e fundo da imagem</p>
+                </div>
+              </div>
+              <button
+                onClick={() => setLogoModalOpen(false)}
+                className="p-1.5 text-gray-400 hover:text-white rounded-lg hover:bg-white/5"
+              >
+                <X size={16} />
+              </button>
+            </div>
+
+            {/* Transparência detectada alert */}
+            {hasDetectedTransparency && (
+              <div className="p-2.5 bg-emerald-950/40 border border-emerald-500/30 rounded-xl flex items-center gap-2 text-emerald-300 text-xs">
+                <Check size={14} className="shrink-0" />
+                <span>✓ Fundo transparente detectado nativamente no arquivo PNG!</span>
+              </div>
+            )}
+
+            {/* Side-by-side or Choice Preview */}
+            <div className="grid grid-cols-2 gap-3">
+              {/* Option 1: Original */}
+              <div
+                onClick={() => setSelectedBgChoice('original')}
+                className={`p-3 rounded-2xl border cursor-pointer flex flex-col items-center gap-2 transition-all ${
+                  selectedBgChoice === 'original'
+                    ? 'bg-purple-950/40 border-purple-500 shadow-[0_0_15px_rgba(168,85,247,0.3)]'
+                    : 'bg-[#07060f] border-white/5 hover:border-purple-500/30'
+                }`}
+              >
+                <div className="w-24 h-24 rounded-xl bg-[#141224] border border-white/10 flex items-center justify-center p-2 overflow-hidden">
+                  <img
+                    src={originalLogoSrc}
+                    alt="Original"
+                    className="max-w-full max-h-full object-contain"
+                  />
+                </div>
+                <div className="text-center">
+                  <span className="text-xs font-bold text-white block">Original</span>
+                  <span className="text-[10px] text-gray-400">Manter como está</span>
+                </div>
+              </div>
+
+              {/* Option 2: Sem Fundo (Automático) */}
+              <div
+                onClick={() => {
+                  if (removedBgLogoSrc) setSelectedBgChoice('removed');
+                }}
+                className={`p-3 rounded-2xl border cursor-pointer flex flex-col items-center gap-2 transition-all ${
+                  selectedBgChoice === 'removed'
+                    ? 'bg-purple-950/40 border-purple-500 shadow-[0_0_15px_rgba(168,85,247,0.3)]'
+                    : 'bg-[#07060f] border-white/5 hover:border-purple-500/30'
+                }`}
+              >
+                <div className="w-24 h-24 rounded-xl border border-white/10 flex items-center justify-center p-2 overflow-hidden bg-[radial-gradient(#333_1px,transparent_1px)] [background-size:8px_8px] bg-[#12111d]">
+                  {isProcessingRemoval ? (
+                    <div className="w-5 h-5 border-2 border-purple-400 border-t-transparent rounded-full animate-spin" />
+                  ) : removedBgLogoSrc ? (
+                    <img
+                      src={removedBgLogoSrc}
+                      alt="Sem fundo"
+                      className="max-w-full max-h-full object-contain"
+                    />
+                  ) : (
+                    <span className="text-[10px] text-gray-500">Erro</span>
+                  )}
+                </div>
+                <div className="text-center">
+                  <span className="text-xs font-bold text-white block">Sem Fundo</span>
+                  <span className="text-[10px] text-gray-400">Fundo removido</span>
+                </div>
+              </div>
+            </div>
+
+            {/* Actions */}
+            <div className="flex items-center justify-end gap-2 pt-2 border-t border-white/5">
+              <button
+                type="button"
+                onClick={() => setLogoModalOpen(false)}
+                className="px-4 py-2 bg-[#141224] hover:bg-[#1d1a35] text-gray-300 text-xs font-bold rounded-xl transition-all"
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirmLogoModal}
+                className="px-5 py-2 bg-gradient-to-r from-purple-600 to-violet-600 hover:from-purple-500 hover:to-violet-500 text-white text-xs font-bold rounded-xl shadow-[0_0_15px_rgba(147,51,234,0.4)] transition-all"
+              >
+                {selectedBgChoice === 'removed' ? 'Usar Sem Fundo' : 'Usar Original'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ─────────────────────────────────────────────────────────
           DOWNLOAD / EXPORT MODAL: BAIXAR BIOSITE
          ───────────────────────────────────────────────────────── */}
       {downloadModalOpen && (
         <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-md flex items-center justify-center p-4">
           <div className="w-full max-w-md bg-[#0e0d1c] border border-purple-500/30 rounded-3xl p-6 shadow-[0_20px_60px_rgba(0,0,0,0.9)] space-y-5 animate-in fade-in zoom-in-95">
-            
             {/* Modal Header */}
             <div className="flex items-center justify-between border-b border-purple-500/20 pb-3">
               <div className="flex items-center gap-2.5">
@@ -1406,7 +2309,6 @@ export const BiositeEditor: React.FC<BiositeEditorProps> = ({
           </div>
         </div>
       )}
-
     </div>
   );
 };
