@@ -39,6 +39,72 @@ export type FieldType =
   | 'hours'
   | 'color';
 
+export type EditorCategory =
+  | 'identidade'
+  | 'textos'
+  | 'contato'
+  | 'botoes'
+  | 'cards'
+  | 'imagens'
+  | 'localizacao'
+  | 'outros';
+
+export type EditorElementType =
+  | 'logo'
+  | 'image'
+  | 'title'
+  | 'text'
+  | 'whatsapp'
+  | 'email'
+  | 'phone'
+  | 'instagram'
+  | 'facebook'
+  | 'tiktok'
+  | 'youtube'
+  | 'maps'
+  | 'location'
+  | 'button'
+  | 'card'
+  | 'credential'
+  | 'link';
+
+export interface EditableElement {
+  id: string; // unique identifier
+  editorType: EditorElementType;
+  category: EditorCategory;
+  label: string;
+  description?: string;
+  selector: string;
+  tagName: string;
+  attr: 'text' | 'src' | 'href' | 'both';
+  originalValue: string;
+  originalText?: string;
+  originalHref?: string;
+  originalSrc?: string;
+  details?: {
+    phone?: string;
+    message?: string;
+    email?: string;
+    buttonText?: string;
+    iconSrc?: string;
+    cardTitle?: string;
+    cardSubtitle?: string;
+    href?: string;
+  };
+}
+
+export interface EditableElementMap {
+  elements: EditableElement[];
+  categories: {
+    id: EditorCategory;
+    name: string;
+    icon: string;
+    count: number;
+    elements: EditableElement[];
+  }[];
+  byId: Record<string, EditableElement>;
+}
+
 export interface EditableField {
   id: string;
   name: string;

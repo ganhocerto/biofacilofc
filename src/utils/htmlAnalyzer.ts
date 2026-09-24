@@ -1,4 +1,14 @@
-import { EditableField, FieldType, IconStyleType, SocialItemConfig, LogoConfig } from '../types';
+import {
+  EditableField,
+  FieldType,
+  IconStyleType,
+  SocialItemConfig,
+  LogoConfig,
+  EditableElement,
+  EditableElementMap,
+  EditorCategory,
+  EditorElementType,
+} from '../types';
 
 export interface DetectedElement {
   id: string;
@@ -907,6 +917,514 @@ function deduplicateDetected(list: DetectedElement[]): DetectedElement[] {
 }
 
 /**
+ * Helper to slugify a string for safe, clean IDs
+ */
+export function slugifyText(text: string): string {
+  return (text || '')
+    .toString()
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '')
+    .slice(0, 24);
+}
+
+/**
+ * 100% Dynamic & Adaptive Editable Elements Map Builder.
+ * Analyzes ANY biosite model (whether standard, imported, or pasted)
+ * and builds a comprehensive, structured map of all editable elements
+ * (Cards, CTAs, WhatsApp, Emails, Phones, Credentials, Titles, Texts, Images, etc.)
+ * grouped dynamically without hardcoded assumptions.
+ */
+export function buildEditableElementsMap(
+  rawHtml: string,
+  templateFields?: EditableField[]
+): EditableElementMap {
+  const parser = new DOMParser();
+  const doc = parser.parseFromString(rawHtml, 'text/html');
+
+  const elements: EditableElement[] = [];
+  const consumed = new Set<Element>();
+  const seenIds = new Set<string>();
+
+  const getUniqueId = (base: string): string => {
+    let clean = slugifyText(base) || 'el';
+    if (!seenIds.has(clean)) {
+      seenIds.add(clean);
+      return clean;
+    }
+    let counter = 2;
+    while (seenIds.has(`${clean}_${counter}`)) {
+      counter++;
+    }
+    const finalId = `${clean}_${counter}`;
+    seenIds.add(finalId);
+    return finalId;
+  };
+
+  // -------------------------------------------------------------
+  // 1. Explicit Metadata: data-editor-* & data-bio-*
+  // -------------------------------------------------------------
+  const explicitEls = doc.querySelectorAll('[data-editor-id], [data-bio-text], [data-bio-image], [data-bio-link]');
+  explicitEls.forEach((el, idx) => {
+    const editorId = el.getAttribute('data-editor-id');
+    const bioText = el.getAttribute('data-bio-text');
+    const bioImg = el.getAttribute('data-bio-image');
+    const bioLink = el.getAttribute('data-bio-link');
+
+    const id = editorId || bioText || bioImg || bioLink || `explicit_${idx + 1}`;
+    if (seenIds.has(id)) return;
+
+    const tag = el.tagName.toLowerCase();
+    let type: EditorElementType = 'text';
+    let cat: EditorCategory = 'textos';
+    let label = el.getAttribute('data-editor-label') || formatFieldLabel(id);
+    let originalVal = '';
+    let href = el.getAttribute('href') || '';
+    let src = el.getAttribute('src') || '';
+    const text = (el.textContent || '').trim();
+
+    if (tag === 'img' || bioImg) {
+      type = id.toLowerCase().includes('logo') ? 'logo' : 'image';
+      cat = type === 'logo' ? 'identidade' : 'imagens';
+      originalVal = src;
+    } else if (tag === 'a' || bioLink) {
+      if (href.includes('wa.me') || href.includes('whatsapp') || href.includes('api.whatsapp')) {
+        type = 'whatsapp';
+        cat = 'botoes';
+      } else if (href.startsWith('mailto:')) {
+        type = 'email';
+        cat = 'contato';
+      } else if (href.startsWith('tel:')) {
+        type = 'phone';
+        cat = 'contato';
+      } else if (href.includes('instagram.com')) {
+        type = 'instagram';
+        cat = 'contato';
+      } else if (href.includes('maps.google') || href.includes('goo.gl/maps')) {
+        type = 'maps';
+        cat = 'localizacao';
+      } else {
+        type = 'button';
+        cat = 'botoes';
+      }
+      originalVal = text || href;
+    } else {
+      if (tag === 'h1' || id === 'nome_empresa') {
+        type = 'title';
+        cat = 'identidade';
+      } else if (['h2', 'h3'].includes(tag)) {
+        type = 'title';
+        cat = 'textos';
+      } else {
+        type = 'text';
+        cat = 'textos';
+      }
+      originalVal = text;
+    }
+
+    seenIds.add(id);
+    consumed.add(el);
+    el.querySelectorAll('*').forEach((c) => consumed.add(c));
+
+    elements.push({
+      id,
+      editorType: type,
+      category: cat,
+      label,
+      selector: generateUniqueSelector(el),
+      tagName: tag,
+      attr: tag === 'img' ? 'src' : tag === 'a' ? 'href' : 'text',
+      originalValue: originalVal,
+      originalText: text,
+      originalHref: href,
+      originalSrc: src,
+      details: {
+        phone: type === 'whatsapp' ? parseWhatsAppUrl(href).phone : undefined,
+        message: type === 'whatsapp' ? parseWhatsAppUrl(href).message : undefined,
+        buttonText: text,
+        href,
+        email: type === 'email' ? href.replace(/^mailto:/i, '') : undefined,
+      },
+    });
+  });
+
+  // -------------------------------------------------------------
+  // 2. Structured Cards Detection (e.g. Outlook, Gmail, Service Cards)
+  // -------------------------------------------------------------
+  const cardCandidates = doc.querySelectorAll(
+    '.card, [class*="card"], .service-item, [class*="service-item"], [class*="service-card"], [class*="info-card"], .box, [class*="box-"], .panel, [class*="panel-"], .item-card, .link-card'
+  );
+
+  cardCandidates.forEach((cardEl, idx) => {
+    if (consumed.has(cardEl)) return;
+
+    const titleEl = cardEl.querySelector('h1, h2, h3, h4, h5, h6, strong, b, .title, [class*="title"], [class*="name"]');
+    const titleText = (titleEl?.textContent || '').trim();
+
+    const btnEl =
+      cardEl.querySelector('a, button, [class*="btn"], [class*="button"], [class*="cta"]') ||
+      (cardEl.tagName === 'A' ? cardEl : null);
+    const btnText = (btnEl?.textContent || '').trim();
+    const btnHref = btnEl?.getAttribute('href') || '';
+
+    const imgEl = cardEl.querySelector('img');
+    const imgSrc = imgEl?.getAttribute('src') || '';
+
+    const subEl = cardEl.querySelector('p, span, .desc, .email, [class*="desc"]');
+    const subText = (subEl?.textContent || '').trim();
+
+    // If card has recognizable title or button with meaningful content
+    if (titleText.length >= 2 || (btnText.length >= 2 && btnHref)) {
+      const cardTitle = titleText || btnText || `Card ${idx + 1}`;
+      const cardId = getUniqueId(`card_${slugifyText(cardTitle) || idx + 1}`);
+
+      const emailMatch =
+        btnHref.startsWith('mailto:')
+          ? btnHref.replace(/^mailto:/i, '')
+          : subText.includes('@')
+          ? subText
+          : undefined;
+
+      elements.push({
+        id: cardId,
+        editorType: 'card',
+        category: 'cards',
+        label: `Card: ${cardTitle}`,
+        description: subText ? subText.slice(0, 50) : undefined,
+        selector: generateUniqueSelector(cardEl),
+        tagName: cardEl.tagName.toLowerCase(),
+        attr: 'both',
+        originalValue: cardTitle,
+        originalText: cardTitle,
+        originalHref: btnHref,
+        originalSrc: imgSrc,
+        details: {
+          cardTitle,
+          buttonText: btnText || 'Acessar',
+          href: btnHref,
+          iconSrc: imgSrc,
+          cardSubtitle: subText,
+          email: emailMatch,
+        },
+      });
+
+      consumed.add(cardEl);
+      cardEl.querySelectorAll('*').forEach((c) => consumed.add(c));
+    }
+  });
+
+  // -------------------------------------------------------------
+  // 3. Standalone Buttons & CTAs (WhatsApp, Email, Phone, Socials, Links)
+  // -------------------------------------------------------------
+  const allLinks = doc.querySelectorAll('a[href], button, [role="button"], [class*="btn"], [class*="cta"]');
+  allLinks.forEach((linkEl, idx) => {
+    if (consumed.has(linkEl)) return;
+
+    const text = (linkEl.textContent || '').trim();
+    const href = linkEl.getAttribute('href') || '';
+    const lowerHref = href.toLowerCase();
+    const lowerText = text.toLowerCase();
+
+    // Skip empty or purely hashtag anchors without text
+    if (!text && (!href || href === '#')) return;
+
+    let type: EditorElementType = 'button';
+    let cat: EditorCategory = 'botoes';
+    let label = '';
+    let baseId = '';
+    let details: EditableElement['details'] = { buttonText: text, href };
+
+    if (
+      lowerHref.includes('wa.me') ||
+      lowerHref.includes('whatsapp') ||
+      lowerHref.includes('api.whatsapp') ||
+      lowerText.includes('whatsapp')
+    ) {
+      type = 'whatsapp';
+      cat = 'botoes';
+      label = `Botão WhatsApp — ${text || 'Solicitar Atendimento'}`;
+      baseId = `cta_${slugifyText(text) || `whatsapp_${idx + 1}`}`;
+      const wa = parseWhatsAppUrl(href);
+      details = {
+        buttonText: text || 'Solicitar Atendimento',
+        phone: wa.phone,
+        message: wa.message,
+        href,
+      };
+    } else if (lowerHref.startsWith('mailto:') || (text.includes('@') && text.includes('.'))) {
+      type = 'email';
+      cat = 'contato';
+      const email = lowerHref.startsWith('mailto:')
+        ? href.replace(/^mailto:/i, '').split('?')[0].trim()
+        : text;
+      label = `E-mail — ${text || email}`;
+      baseId = `email_${slugifyText(text) || `contato_${idx + 1}`}`;
+      details = { buttonText: text, email, href };
+    } else if (lowerHref.startsWith('tel:') || /ligar|telefone/i.test(text)) {
+      type = 'phone';
+      cat = 'contato';
+      const phone = href.replace(/^tel:/i, '').trim();
+      label = `Telefone — ${text || phone}`;
+      baseId = `tel_${slugifyText(text) || `ligar_${idx + 1}`}`;
+      details = { buttonText: text, phone, href };
+    } else if (lowerHref.includes('instagram.com')) {
+      type = 'instagram';
+      cat = 'contato';
+      label = 'Instagram';
+      baseId = 'social_instagram';
+      details = { buttonText: text || 'Instagram', href };
+    } else if (lowerHref.includes('facebook.com') || lowerHref.includes('fb.com')) {
+      type = 'facebook';
+      cat = 'contato';
+      label = 'Facebook';
+      baseId = 'social_facebook';
+      details = { buttonText: text || 'Facebook', href };
+    } else if (lowerHref.includes('tiktok.com')) {
+      type = 'tiktok';
+      cat = 'contato';
+      label = 'TikTok';
+      baseId = 'social_tiktok';
+      details = { buttonText: text || 'TikTok', href };
+    } else if (lowerHref.includes('youtube.com') || lowerHref.includes('youtu.be')) {
+      type = 'youtube';
+      cat = 'contato';
+      label = 'YouTube';
+      baseId = 'social_youtube';
+      details = { buttonText: text || 'YouTube', href };
+    } else if (
+      lowerHref.includes('maps.google') ||
+      lowerHref.includes('goo.gl/maps') ||
+      lowerHref.includes('google.com/maps')
+    ) {
+      type = 'maps';
+      cat = 'localizacao';
+      label = 'Google Maps';
+      baseId = 'localizacao_maps';
+      details = { buttonText: text || 'Como Chegar', href };
+    } else {
+      type = 'button';
+      cat = 'botoes';
+      label = `Botão — ${text || `Ação ${idx + 1}`}`;
+      baseId = `btn_${slugifyText(text) || `link_${idx + 1}`}`;
+      details = { buttonText: text, href };
+    }
+
+    const uniqueId = getUniqueId(baseId);
+    elements.push({
+      id: uniqueId,
+      editorType: type,
+      category: cat,
+      label,
+      selector: generateUniqueSelector(linkEl),
+      tagName: linkEl.tagName.toLowerCase(),
+      attr: type === 'button' ? 'both' : 'href',
+      originalValue: text || href,
+      originalText: text,
+      originalHref: href,
+      details,
+    });
+
+    consumed.add(linkEl);
+    linkEl.querySelectorAll('*').forEach((c) => consumed.add(c));
+  });
+
+  // -------------------------------------------------------------
+  // 4. Standalone Images & Logos
+  // -------------------------------------------------------------
+  const allImages = doc.querySelectorAll('img');
+  let hasLogo = false;
+  allImages.forEach((imgEl, idx) => {
+    if (consumed.has(imgEl)) return;
+
+    const src = imgEl.getAttribute('src') || '';
+    if (!src || src.length < 5) return;
+
+    const cls = (imgEl.className || '').toLowerCase();
+    const alt = (imgEl.getAttribute('alt') || '').toLowerCase();
+    const id = (imgEl.id || '').toLowerCase();
+
+    const isLogo =
+      !hasLogo &&
+      (cls.includes('logo') ||
+        alt.includes('logo') ||
+        id.includes('logo') ||
+        !!imgEl.closest('.logo, [class*="logo"], header, nav') ||
+        idx === 0);
+
+    let type: EditorElementType = 'image';
+    let cat: EditorCategory = 'imagens';
+    let label = '';
+    let baseId = '';
+
+    if (isLogo) {
+      hasLogo = true;
+      type = 'logo';
+      cat = 'identidade';
+      label = 'Logomarca Principal';
+      baseId = 'logo';
+    } else {
+      type = 'image';
+      cat = 'imagens';
+      label = imgEl.alt ? `Imagem: ${imgEl.alt.slice(0, 24)}` : `Imagem ${idx + 1} de Destaque`;
+      baseId = `img_${idx + 1}`;
+    }
+
+    const uniqueId = getUniqueId(baseId);
+    elements.push({
+      id: uniqueId,
+      editorType: type,
+      category: cat,
+      label,
+      selector: generateUniqueSelector(imgEl),
+      tagName: 'img',
+      attr: 'src',
+      originalValue: src,
+      originalSrc: src,
+    });
+
+    consumed.add(imgEl);
+  });
+
+  // -------------------------------------------------------------
+  // 5. Headings, Professional Credentials, Subtitles & Texts
+  // -------------------------------------------------------------
+  const allTexts = doc.querySelectorAll(
+    'h1, h2, h3, h4, h5, h6, p, .bio, .subtitle, .description, .address, [class*="bio"], [class*="title"], [class*="name"]'
+  );
+
+  allTexts.forEach((textEl, idx) => {
+    if (consumed.has(textEl)) return;
+
+    // Avoid container elements whose child nodes also match
+    const childMatches = textEl.querySelectorAll('h1, h2, h3, h4, h5, h6, p');
+    if (childMatches.length > 0) return;
+
+    const text = (textEl.textContent || '').trim();
+    if (text.length < 2) return;
+
+    const tag = textEl.tagName.toUpperCase();
+    const cls = (textEl.className || '').toLowerCase();
+
+    // A. Professional Credential (CREA, CRM, OAB, CRO, CNPJ, CAU, etc.)
+    const isCred = /CREA|CRM|OAB|CRO|CAU|CRF|CRP|CNPJ|Registro\s*Profissional/i.test(text);
+
+    // B. Address
+    const isAddress =
+      /Rua|Av\.|Avenida|Bairro|CEP|Praça|Alameda|Centro|Rodovia/i.test(text) ||
+      cls.includes('address') ||
+      cls.includes('endereco');
+
+    // C. Main Name / Company Title
+    const isMainTitle = tag === 'H1' || (idx === 0 && !elements.some((e) => e.id === 'nome_empresa'));
+
+    // D. Subtitle / Slogan
+    const isSubtitle =
+      cls.includes('sub') ||
+      cls.includes('slogan') ||
+      cls.includes('bio') ||
+      cls.includes('desc') ||
+      (tag === 'P' && idx <= 2);
+
+    let type: EditorElementType = 'text';
+    let cat: EditorCategory = 'textos';
+    let label = '';
+    let baseId = '';
+
+    if (isCred) {
+      type = 'credential';
+      cat = 'identidade';
+      label = `Registro Profissional (${text.slice(0, 20)})`;
+      baseId = `registro_profissional_${slugifyText(text)}`;
+    } else if (isAddress) {
+      type = 'location';
+      cat = 'localizacao';
+      label = 'Endereço Exibido';
+      baseId = 'endereco_exibido';
+    } else if (isMainTitle) {
+      type = 'title';
+      cat = 'identidade';
+      label = 'Nome Principal / Título';
+      baseId = 'nome_empresa';
+    } else if (isSubtitle) {
+      type = 'text';
+      cat = 'textos';
+      label = 'Subtítulo / Slogan de Apresentação';
+      baseId = 'subtitulo_principal';
+    } else if (['H2', 'H3', 'H4', 'H5', 'H6'].includes(tag)) {
+      type = 'title';
+      cat = 'textos';
+      label = `Título — ${text.slice(0, 26)}...`;
+      baseId = `titulo_${slugifyText(text) || idx + 1}`;
+    } else {
+      type = 'text';
+      cat = 'textos';
+      label = `Texto — ${text.slice(0, 26)}...`;
+      baseId = `texto_${slugifyText(text) || idx + 1}`;
+    }
+
+    const uniqueId = getUniqueId(baseId);
+    elements.push({
+      id: uniqueId,
+      editorType: type,
+      category: cat,
+      label,
+      selector: generateUniqueSelector(textEl),
+      tagName: tag.toLowerCase(),
+      attr: 'text',
+      originalValue: text,
+      originalText: text,
+    });
+
+    consumed.add(textEl);
+  });
+
+  // -------------------------------------------------------------
+  // 6. Build Category Groups (Dynamic — hide any category with 0 items)
+  // -------------------------------------------------------------
+  const categoryMeta: Record<EditorCategory, { name: string; icon: string; order: number }> = {
+    identidade: { name: 'Identidade & Empresa', icon: 'Store', order: 1 },
+    textos: { name: 'Textos & Títulos', icon: 'Type', order: 2 },
+    contato: { name: 'Contato & Redes Sociais', icon: 'Phone', order: 3 },
+    botoes: { name: 'Botões & Ações (CTAs)', icon: 'MousePointerClick', order: 4 },
+    cards: { name: 'Cards & Serviços', icon: 'Layers', order: 5 },
+    imagens: { name: 'Imagens & Fotos', icon: 'ImageIcon', order: 6 },
+    localizacao: { name: 'Localização & Endereço', icon: 'MapPin', order: 7 },
+    outros: { name: 'Outros Elementos', icon: 'Sparkles', order: 8 },
+  };
+
+  const byId: Record<string, EditableElement> = {};
+  elements.forEach((el) => {
+    byId[el.id] = el;
+  });
+
+  const categories: EditableElementMap['categories'] = [];
+  const catKeys = Object.keys(categoryMeta) as EditorCategory[];
+  catKeys.sort((a, b) => categoryMeta[a].order - categoryMeta[b].order);
+
+  catKeys.forEach((catKey) => {
+    const catElements = elements.filter((el) => el.category === catKey);
+    // Only include categories that actually have elements in this template!
+    if (catElements.length > 0) {
+      categories.push({
+        id: catKey,
+        name: categoryMeta[catKey].name,
+        icon: categoryMeta[catKey].icon,
+        count: catElements.length,
+        elements: catElements,
+      });
+    }
+  });
+
+  return {
+    elements,
+    categories,
+    byId,
+  };
+}
+
+/**
  * Transforms raw HTML by stamping data-bio-* attributes without changing design or layout
  */
 export function stampDataBioAttributes(
@@ -1055,6 +1573,32 @@ export function compileBiositeHtml(
     if (val === undefined || val === null || val === '') return;
     // Skip general network keys already comprehensively processed
     if (['whatsapp', 'logo', 'instagram', 'facebook', 'tiktok', 'youtube', 'maps'].includes(key)) return;
+
+    // Search by data-editor-id
+    const editorEls = doc.querySelectorAll(`[data-editor-id="${key}"]`);
+    if (editorEls.length > 0) {
+      editorEls.forEach((el) => {
+        const eType = el.getAttribute('data-editor-type');
+        if (el.tagName === 'IMG') {
+          el.setAttribute('src', val);
+          if (el.hasAttribute('srcset')) el.removeAttribute('srcset');
+        } else if (el.tagName === 'A') {
+          if (eType === 'whatsapp' || val.includes('wa.me')) {
+            el.setAttribute('href', val);
+          } else if (val.startsWith('http') || val.startsWith('mailto:') || val.startsWith('tel:')) {
+            el.setAttribute('href', val);
+          } else {
+            el.textContent = val;
+          }
+        } else if (eType === 'card') {
+          const t = el.querySelector('h1, h2, h3, h4, h5, h6, strong, b, .title, [class*="title"], [class*="name"]');
+          if (t) t.textContent = val;
+        } else {
+          el.textContent = val;
+        }
+      });
+      return;
+    }
 
     // Search by data-bio-eid
     const eidEls = doc.querySelectorAll(`[data-bio-eid="${key}"]`);
@@ -1393,8 +1937,21 @@ export function normalizeInstagram(input: string): { handle: string; url: string
  */
 export function injectVisualInspectorScript(
   html: string,
-  enableInspector: boolean
+  enableInspector: boolean,
+  elementMap?: EditableElementMap
 ): string {
+  const elementMapJson = JSON.stringify(
+    elementMap?.elements?.map((e) => ({
+      id: e.id,
+      editorType: e.editorType,
+      category: e.category,
+      selector: e.selector,
+      originalText: e.originalText,
+      originalHref: e.originalHref,
+      originalSrc: e.originalSrc,
+    })) || []
+  );
+
   const inspectorScript = `
   <script id="biofacil-inspector-script">
     (function() {
@@ -1402,13 +1959,49 @@ export function injectVisualInspectorScript(
       var isInspectorActive = ${enableInspector ? 'true' : 'false'};
       var currentSelectedEl = null;
       var currentHoverEl = null;
+      var elementMapData = ${elementMapJson};
 
-      // Assign stable IDs on load to content elements that lack data-bio-*
+      // Stamp dynamic IDs from map
+      function stampElementMap() {
+        if (!elementMapData || !elementMapData.length) return;
+        elementMapData.forEach(function(item) {
+          var el = null;
+          try {
+            if (item.selector) el = document.querySelector(item.selector);
+          } catch(e) {}
+          if (!el && item.id) {
+            el = document.getElementById(item.id) ||
+                 document.querySelector('[data-bio-text="' + item.id + '"]') ||
+                 document.querySelector('[data-bio-image="' + item.id + '"]') ||
+                 document.querySelector('[data-bio-link="' + item.id + '"]');
+          }
+          if (!el && item.originalSrc) {
+            el = document.querySelector('img[src="' + item.originalSrc + '"]');
+          }
+          if (!el && item.originalHref) {
+            el = document.querySelector('a[href="' + item.originalHref + '"]');
+          }
+          if (el) {
+            el.setAttribute('data-editor-id', item.id);
+            el.setAttribute('data-editor-type', item.editorType);
+            el.setAttribute('data-editor-category', item.category);
+            if (item.editorType === 'card') {
+              el.querySelectorAll('*').forEach(function(ch) {
+                ch.setAttribute('data-editor-parent-id', item.id);
+              });
+            }
+          }
+        });
+      }
+
+      // Assign stable fallback IDs on load to content elements
       function stampStableIds() {
+        stampElementMap();
         var elements = document.querySelectorAll('img, a, button, h1, h2, h3, h4, h5, h6, p, span, li');
         var counter = 0;
         elements.forEach(function(el) {
-          if (!el.getAttribute('data-bio-text') && 
+          if (!el.getAttribute('data-editor-id') &&
+              !el.getAttribute('data-bio-text') && 
               !el.getAttribute('data-bio-image') && 
               !el.getAttribute('data-bio-link') && 
               !el.getAttribute('data-bio-eid')) {
@@ -1503,46 +2096,72 @@ export function injectVisualInspectorScript(
           var eid = data.elementId;
           var val = data.value;
           var attr = data.attr;
+          var extra = data.extra;
 
-          // Immediate universal update for WhatsApp links
-          if (semType === 'whatsapp' || eid === 'whatsapp') {
-            var waEls = document.querySelectorAll('a[href*="wa.me"], a[href*="whatsapp"], a[href*="api.whatsapp.com"], [data-bio-link="whatsapp"]');
-            waEls.forEach(function(l) { l.setAttribute('href', val); });
-          } else if (semType === 'instagram' || eid === 'instagram') {
-            var inEls = document.querySelectorAll('a[href*="instagram.com"], [data-bio-link="instagram"]');
-            inEls.forEach(function(l) { l.setAttribute('href', val); });
-          } else if (semType === 'logo' || eid === 'logo') {
-            var logoImgs = document.querySelectorAll('img[data-bio-image="logo"], img[data-bio-image="logo_principal"], .logo img, [class*="logo"] img, img[alt*="logo" i]');
-            if (logoImgs.length > 0) {
+          // Target specific element by data-editor-id
+          var targetEl = eid ? document.querySelector('[data-editor-id="' + eid + '"]') : null;
+          if (!targetEl && eid) {
+            targetEl = document.querySelector('[data-bio-eid="' + eid + '"]') ||
+                       document.querySelector('[data-bio-text="' + eid + '"]') ||
+                       document.querySelector('[data-bio-image="' + eid + '"]') ||
+                       document.querySelector('[data-bio-link="' + eid + '"]') ||
+                       document.getElementById(eid);
+          }
+
+          if (targetEl) {
+            var targetType = targetEl.getAttribute('data-editor-type') || semType;
+            if (targetType === 'card' && extra) {
+              if (extra.cardTitle) {
+                var cTitle = targetEl.querySelector('h1, h2, h3, h4, h5, h6, strong, b, .title, [class*="title"], [class*="name"]');
+                if (cTitle) cTitle.textContent = extra.cardTitle;
+              }
+              if (extra.buttonText) {
+                var cBtn = targetEl.querySelector('a, button, [class*="btn"], [class*="button"], [class*="cta"]');
+                if (cBtn) cBtn.textContent = extra.buttonText;
+              }
+              if (extra.href) {
+                var cA = targetEl.querySelector('a') || (targetEl.tagName.toLowerCase() === 'a' ? targetEl : null);
+                if (cA) cA.setAttribute('href', extra.href);
+              }
+              if (extra.iconSrc) {
+                var cImg = targetEl.querySelector('img');
+                if (cImg) cImg.setAttribute('src', extra.iconSrc);
+              }
+            } else if (targetType === 'whatsapp') {
+              if (extra && extra.buttonText) targetEl.textContent = extra.buttonText;
+              if (val) targetEl.setAttribute('href', val);
+            } else if (targetType === 'button') {
+              if (extra && extra.buttonText) targetEl.textContent = extra.buttonText;
+              if (val) targetEl.setAttribute('href', val);
+            } else if (attr === 'src' || targetEl.tagName.toLowerCase() === 'img') {
+              targetEl.setAttribute('src', val);
+              if (targetEl.hasAttribute('srcset')) targetEl.removeAttribute('srcset');
+            } else if (attr === 'href' || targetEl.tagName.toLowerCase() === 'a') {
+              targetEl.setAttribute('href', val);
+            } else {
+              targetEl.textContent = val;
+            }
+          } else {
+            // Universal fallback handlers
+            if (semType === 'whatsapp' || eid === 'whatsapp') {
+              var waEls = document.querySelectorAll('a[href*="wa.me"], a[href*="whatsapp"], a[href*="api.whatsapp.com"], [data-bio-link="whatsapp"]');
+              waEls.forEach(function(l) { l.setAttribute('href', val); });
+            } else if (semType === 'instagram' || eid === 'instagram') {
+              var inEls = document.querySelectorAll('a[href*="instagram.com"], [data-bio-link="instagram"]');
+              inEls.forEach(function(l) { l.setAttribute('href', val); });
+            } else if (semType === 'logo' || eid === 'logo') {
+              var logoImgs = document.querySelectorAll('img[data-bio-image="logo"], img[data-bio-image="logo_principal"], .logo img, [class*="logo"] img, img[alt*="logo" i]');
               logoImgs.forEach(function(img) {
                 img.setAttribute('src', val);
                 if (img.hasAttribute('srcset')) img.removeAttribute('srcset');
               });
-            } else if (eid) {
-              var specificLogo = document.querySelector('[data-bio-eid="' + eid + '"]') || document.getElementById(eid);
-              if (specificLogo) specificLogo.setAttribute('src', val);
-            }
-          } else if (eid) {
-            var matchEl = document.querySelector('[data-bio-eid="' + eid + '"]') ||
-                          document.querySelector('[data-bio-text="' + eid + '"]') ||
-                          document.querySelector('[data-bio-image="' + eid + '"]') ||
-                          document.querySelector('[data-bio-link="' + eid + '"]') ||
-                          document.getElementById(eid);
-            if (matchEl) {
-              if (attr === 'src' || matchEl.tagName.toLowerCase() === 'img') {
-                matchEl.setAttribute('src', val);
-                if (matchEl.hasAttribute('srcset')) matchEl.removeAttribute('srcset');
-              } else if (attr === 'href' || matchEl.tagName.toLowerCase() === 'a') {
-                matchEl.setAttribute('href', val);
-              } else {
-                matchEl.textContent = val;
-              }
             }
           }
         } else if (data.type === 'BIO_FACIL_FOCUS_ELEMENT') {
           var targetId = data.fieldId || data.elementId;
           if (!targetId) return;
-          var el = document.querySelector('[data-bio-eid="' + targetId + '"]') ||
+          var el = document.querySelector('[data-editor-id="' + targetId + '"]') ||
+                   document.querySelector('[data-bio-eid="' + targetId + '"]') ||
                    document.querySelector('[data-bio-text="' + targetId + '"]') ||
                    document.querySelector('[data-bio-image="' + targetId + '"]') ||
                    document.querySelector('[data-bio-link="' + targetId + '"]') ||
@@ -1563,7 +2182,7 @@ export function injectVisualInspectorScript(
       // Hover outline when inspector is active
       document.addEventListener('mouseover', function(e) {
         if (!isInspectorActive) return;
-        var target = e.target.closest('[data-bio-text], [data-bio-image], [data-bio-link], [data-bio-eid], a, button, img, h1, h2, h3, h4, h5, h6, p, span');
+        var target = e.target.closest('[data-editor-id], [data-editor-parent-id], [data-bio-text], [data-bio-image], [data-bio-link], [data-bio-eid], a, button, img, h1, h2, h3, h4, h5, h6, p, span');
         if (!target || target === currentSelectedEl) return;
         if (currentHoverEl && currentHoverEl !== target && currentHoverEl !== currentSelectedEl) {
           currentHoverEl.style.outline = '';
@@ -1587,14 +2206,20 @@ export function injectVisualInspectorScript(
       // Click to select and edit
       document.addEventListener('click', function(e) {
         if (!isInspectorActive) return;
-        var clickedNode = e.target.closest('[data-bio-text], [data-bio-image], [data-bio-link], [data-bio-eid], a, button, img, h1, h2, h3, h4, h5, h6, p, span');
+        var clickedNode = e.target.closest('[data-editor-id], [data-editor-parent-id], [data-bio-text], [data-bio-image], [data-bio-link], [data-bio-eid], a, button, img, h1, h2, h3, h4, h5, h6, p, span');
         if (!clickedNode) return;
         
         e.preventDefault();
         e.stopPropagation();
 
+        var editorId = clickedNode.getAttribute('data-editor-id') || clickedNode.getAttribute('data-editor-parent-id');
+        if (!editorId) {
+          var pWithId = clickedNode.closest('[data-editor-id]');
+          if (pWithId) editorId = pWithId.getAttribute('data-editor-id');
+        }
+
         var sem = detectSemantic(clickedNode);
-        var target = sem.node;
+        var target = (editorId ? document.querySelector('[data-editor-id="' + editorId + '"]') : null) || sem.node || clickedNode;
 
         if (currentSelectedEl && currentSelectedEl !== target) {
           currentSelectedEl.style.outline = '';
@@ -1608,30 +2233,33 @@ export function injectVisualInspectorScript(
         var bioImage = target.getAttribute('data-bio-image');
         var bioLink = target.getAttribute('data-bio-link');
         var bioEid = target.getAttribute('data-bio-eid');
-        if (!bioEid) {
+        if (!bioEid && !editorId) {
           bioEid = 'bio_el_' + Math.random().toString(36).substr(2, 6);
           target.setAttribute('data-bio-eid', bioEid);
         }
 
         var fieldId = bioText || bioImage || bioLink || '';
-        var elementId = fieldId || bioEid;
+        var elementId = editorId || fieldId || bioEid;
         var tag = target.tagName.toLowerCase();
         var attr = (tag === 'img') ? 'src' : (tag === 'a' ? 'href' : 'text');
         var value = (attr === 'src') ? target.getAttribute('src') : (attr === 'href' ? target.getAttribute('href') : (target.textContent || '').trim());
-        var href = target.getAttribute('href') || '';
-        var waInfo = sem.type === 'whatsapp' ? extractWaInfo(href) : { phone: '', message: '' };
+        var href = target.getAttribute('href') || (target.querySelector('a') ? target.querySelector('a').getAttribute('href') : '') || '';
+        var waInfo = (target.getAttribute('data-editor-type') === 'whatsapp' || sem.type === 'whatsapp') ? extractWaInfo(href) : { phone: '', message: '' };
 
         window.parent.postMessage({
           type: 'BIO_FACIL_ELEMENT_CLICKED',
-          fieldId: fieldId,
           elementId: elementId,
+          editorId: editorId || '',
+          editorType: target.getAttribute('data-editor-type') || sem.type,
+          category: target.getAttribute('data-editor-category') || '',
+          fieldId: fieldId,
           bioEid: bioEid,
-          semanticType: sem.type,
+          semanticType: target.getAttribute('data-editor-type') || sem.type,
           tagName: tag,
           attr: attr,
           value: value,
           text: (target.textContent || '').trim(),
-          src: target.getAttribute('src') || '',
+          src: target.getAttribute('src') || (target.querySelector('img') ? target.querySelector('img').getAttribute('src') : '') || '',
           href: href,
           phone: waInfo.phone,
           message: waInfo.message

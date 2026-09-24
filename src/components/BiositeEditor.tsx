@@ -6,10 +6,15 @@ import {
   IconStyleType,
   SocialItemConfig,
   LogoConfig,
+  EditableElementMap,
+  EditableElement,
+  EditorCategory,
+  EditorElementType,
 } from '../types';
 import {
   compileBiositeHtml,
   injectVisualInspectorScript,
+  buildEditableElementsMap,
   formatPhoneDisplay,
   parseWhatsAppUrl,
   getSuggestedWhatsAppMessage,
@@ -29,6 +34,7 @@ import { downloadBiositeZip } from '../utils/zipManager';
 import { useData } from '../context/DataContext';
 import { useAuth } from '../context/AuthContext';
 import { WhatsAppIcon, InstagramIcon } from './Icons';
+import { DynamicElementField } from './DynamicElementField';
 import {
   ArrowLeft,
   Save,
@@ -62,13 +68,18 @@ import {
   Share2,
   MessageCircle,
   Link as LinkIcon,
+  Award,
+  Mail,
+  Phone,
 } from 'lucide-react';
 
 export interface SelectedInspectorElement {
   elementId: string;
   fieldId?: string;
   bioEid?: string;
-  semanticType: 'whatsapp' | 'logo' | 'image' | 'text' | 'title' | 'instagram' | 'facebook' | 'tiktok' | 'youtube' | 'maps' | 'button' | 'phone' | 'email';
+  editorId?: string;
+  category?: EditorCategory | string;
+  semanticType: 'whatsapp' | 'logo' | 'image' | 'text' | 'title' | 'instagram' | 'facebook' | 'tiktok' | 'youtube' | 'maps' | 'button' | 'phone' | 'email' | 'card' | 'credential' | 'location';
   tagName: string;
   attr: string;
   value: string;
@@ -77,7 +88,55 @@ export interface SelectedInspectorElement {
   href?: string;
   phone?: string;
   message?: string;
+  cardTitle?: string;
+  buttonText?: string;
 }
+
+const CATEGORY_META: Record<
+  EditorCategory,
+  { label: string; desc: string; icon: React.ReactNode }
+> = {
+  identidade: {
+    label: 'Identidade & Logomarca',
+    desc: 'Nome da empresa, slogan e logomarca principal',
+    icon: <Store size={14} />,
+  },
+  cards: {
+    label: 'Cards & Serviços',
+    desc: 'Cards interativos, serviços e blocos de ação',
+    icon: <Layers size={14} />,
+  },
+  botoes: {
+    label: 'Botões & Ações (CTAs)',
+    desc: 'Botões de atendimento, agendamento e links',
+    icon: <MousePointerClick size={14} />,
+  },
+  textos: {
+    label: 'Textos & Títulos',
+    desc: 'Títulos, subtítulos, descrições e parágrafos',
+    icon: <Type size={14} />,
+  },
+  contato: {
+    label: 'Contato & Redes Sociais',
+    desc: 'WhatsApp, telefone, e-mail e perfis sociais',
+    icon: <Share2 size={14} />,
+  },
+  imagens: {
+    label: 'Imagens & Fotos',
+    desc: 'Fotos de perfil, banners e imagens do biosite',
+    icon: <ImageIcon size={14} />,
+  },
+  localizacao: {
+    label: 'Localização & Endereço',
+    desc: 'Endereço e link do Google Maps',
+    icon: <MapPin size={14} />,
+  },
+  outros: {
+    label: 'Outros Conteúdos',
+    desc: 'Elementos complementares personalizados',
+    icon: <Sparkles size={14} />,
+  },
+};
 
 interface BiositeEditorProps {
   template: BiositeTemplate;
@@ -115,19 +174,22 @@ export const BiositeEditor: React.FC<BiositeEditorProps> = ({
   const [deviceView, setDeviceView] = useState<'mobile' | 'desktop'>('mobile');
   const [mobileTab, setMobileTab] = useState<'preview' | 'editor'>('preview');
 
+  // 100% Dynamic Element Map generated from template HTML & fields
+  const editableMap = useMemo(() => {
+    return buildEditableElementsMap(template.htmlContent, template.fields);
+  }, [template.htmlContent, template.fields]);
+
   // Accordion states
-  const [openAccordions, setOpenAccordions] = useState<Record<string, boolean>>({
-    identidade: true,
-    cores: false,
-    icones: false,
-    textos: true,
-    especialidades: false,
-    galeria: false,
-    whatsapp: true,
-    redes: false,
-    localizacao: false,
-    google_review: false,
-    horarios: false,
+  const [openAccordions, setOpenAccordions] = useState<Record<string, boolean>>(() => {
+    const acc: Record<string, boolean> = {
+      cores: false,
+      icones: false,
+    };
+    const map = buildEditableElementsMap(template.htmlContent, template.fields);
+    map.categories.forEach((c) => {
+      acc[c.id] = true;
+    });
+    return acc;
   });
 
   const toggleAccordion = (key: string) => {
@@ -165,6 +227,45 @@ export const BiositeEditor: React.FC<BiositeEditorProps> = ({
     const initial: Record<string, string> = {};
     template.fields.forEach((f) => {
       initial[f.id] = existingProject?.customValues?.[f.id] ?? f.originalValue ?? '';
+    });
+    const map = buildEditableElementsMap(template.htmlContent, template.fields);
+    map.elements.forEach((el) => {
+      if (initial[el.id] === undefined) {
+        initial[el.id] = el.originalValue ?? '';
+      }
+      if (el.editorType === 'card' && el.details) {
+        if (el.details.cardTitle && initial[`${el.id}_title`] === undefined) {
+          initial[`${el.id}_title`] = el.details.cardTitle;
+        }
+        if (el.details.buttonText && initial[`${el.id}_btnText`] === undefined) {
+          initial[`${el.id}_btnText`] = el.details.buttonText;
+        }
+        if (el.details.href && initial[`${el.id}_href`] === undefined) {
+          initial[`${el.id}_href`] = el.details.href;
+        }
+        if (el.details.iconSrc && initial[`${el.id}_src`] === undefined) {
+          initial[`${el.id}_src`] = el.details.iconSrc;
+        }
+      }
+      if (el.editorType === 'whatsapp' && el.details) {
+        if (el.details.phone && initial[`${el.id}_phone`] === undefined) {
+          initial[`${el.id}_phone`] = el.details.phone;
+        }
+        if (el.details.message && initial[`${el.id}_msg`] === undefined) {
+          initial[`${el.id}_msg`] = el.details.message;
+        }
+        if (el.details.buttonText && initial[`${el.id}_text`] === undefined) {
+          initial[`${el.id}_text`] = el.details.buttonText;
+        }
+      }
+      if (el.editorType === 'button' && el.details) {
+        if (el.details.buttonText && initial[`${el.id}_text`] === undefined) {
+          initial[`${el.id}_text`] = el.details.buttonText;
+        }
+        if (el.details.href && initial[`${el.id}_href`] === undefined) {
+          initial[`${el.id}_href`] = el.details.href;
+        }
+      }
     });
     if (existingProject?.customValues) {
       Object.assign(initial, existingProject.customValues);
@@ -264,7 +365,18 @@ export const BiositeEditor: React.FC<BiositeEditorProps> = ({
    * Logo updates all logo images, and all semantic/id/selector queries succeed instantly.
    */
   const updateIframeDom = useCallback(
-    (targetKey: string, value: string, attr?: 'text' | 'src' | 'href', semanticType?: string) => {
+    (
+      targetKey: string,
+      value: string,
+      attr?: 'text' | 'src' | 'href',
+      semanticType?: string,
+      extra?: {
+        cardTitle?: string;
+        buttonText?: string;
+        href?: string;
+        iconSrc?: string;
+      }
+    ) => {
       // 1. Post message to iframe inspector bridge
       iframeRef.current?.contentWindow?.postMessage(
         {
@@ -273,6 +385,7 @@ export const BiositeEditor: React.FC<BiositeEditorProps> = ({
           semanticType: semanticType,
           value: value,
           attr: attr,
+          extra: extra,
         },
         '*'
       );
@@ -280,6 +393,67 @@ export const BiositeEditor: React.FC<BiositeEditorProps> = ({
       // 2. Direct DOM mutation on contentDocument for instantaneous preview response
       const doc = iframeRef.current?.contentDocument;
       if (!doc) return;
+
+      // Priority 1: Match by data-editor-id (Dynamic Architecture)
+      const editorEl = doc.querySelector(`[data-editor-id="${targetKey}"]`);
+      if (editorEl) {
+        const eType = editorEl.getAttribute('data-editor-type') || semanticType;
+        if (eType === 'card' && extra) {
+          if (extra.cardTitle) {
+            const t = editorEl.querySelector(
+              'h1, h2, h3, h4, h5, h6, strong, b, .title, [class*="title"], [class*="name"]'
+            );
+            if (t) t.textContent = extra.cardTitle;
+          }
+          if (extra.buttonText) {
+            const b = editorEl.querySelector(
+              'a, button, [class*="btn"], [class*="button"], [class*="cta"]'
+            );
+            if (b) b.textContent = extra.buttonText;
+          }
+          if (extra.href) {
+            const a =
+              editorEl.querySelector('a') ||
+              (editorEl.tagName.toLowerCase() === 'a' ? editorEl : null);
+            if (a) (a as HTMLAnchorElement).href = extra.href;
+          }
+          if (extra.iconSrc) {
+            const im = editorEl.querySelector('img');
+            if (im) (im as HTMLImageElement).src = extra.iconSrc;
+          }
+          return;
+        }
+
+        if (eType === 'whatsapp') {
+          if (extra?.buttonText) {
+            editorEl.textContent = extra.buttonText;
+          }
+          if (value) {
+            (editorEl as HTMLAnchorElement).href = value;
+          }
+          return;
+        }
+
+        if (eType === 'button') {
+          if (extra?.buttonText) {
+            editorEl.textContent = extra.buttonText;
+          }
+          if (value) {
+            (editorEl as HTMLAnchorElement).href = value;
+          }
+          return;
+        }
+
+        if (attr === 'src' || editorEl.tagName.toLowerCase() === 'img') {
+          (editorEl as HTMLImageElement).src = value;
+          if (editorEl.hasAttribute('srcset')) editorEl.removeAttribute('srcset');
+        } else if (attr === 'href' || editorEl.tagName.toLowerCase() === 'a') {
+          (editorEl as HTMLAnchorElement).href = value;
+        } else {
+          editorEl.textContent = value;
+        }
+        return;
+      }
 
       // Universal WhatsApp update across all WhatsApp buttons/anchors in the biosite
       if (targetKey === 'whatsapp' || semanticType === 'whatsapp') {
@@ -427,6 +601,27 @@ export const BiositeEditor: React.FC<BiositeEditorProps> = ({
     },
     [fields]
   );
+
+  // Live change handler for any dynamic element
+  const handleDynamicValueChange = (
+    key: string,
+    value: string,
+    attr?: 'text' | 'src' | 'href',
+    semanticType?: string,
+    extra?: {
+      cardTitle?: string;
+      buttonText?: string;
+      href?: string;
+      iconSrc?: string;
+    }
+  ) => {
+    markModified();
+    setCustomValues((prev) => ({
+      ...prev,
+      [key]: value,
+    }));
+    updateIframeDom(key, value, attr, semanticType, extra);
+  };
 
   /**
    * Update theme CSS variables & styles dynamically in the preview iframe
@@ -827,66 +1022,62 @@ export const BiositeEditor: React.FC<BiositeEditorProps> = ({
     const handleMessage = (e: MessageEvent) => {
       if (!e.data || e.data.type !== 'BIO_FACIL_ELEMENT_CLICKED') return;
       const data = e.data;
-      const elementId = data.elementId || data.fieldId || data.bioEid || '';
+      const elementId = data.elementId || data.editorId || data.fieldId || data.bioEid || '';
       if (!elementId) return;
 
-      const semanticType = (data.semanticType || (data.tagName === 'img' ? 'image' : 'text')) as SelectedInspectorElement['semanticType'];
+      const elementDef = editableMap.byId[elementId];
+      const category = elementDef?.category || (data.category as EditorCategory) || '';
+      const semanticType = (elementDef?.editorType ||
+        data.editorType ||
+        data.semanticType ||
+        (data.tagName === 'img' ? 'image' : 'text')) as SelectedInspectorElement['semanticType'];
 
       const selected: SelectedInspectorElement = {
         elementId: elementId,
+        editorId: data.editorId || elementDef?.id,
+        category: category,
         fieldId: data.fieldId,
         bioEid: data.bioEid,
         semanticType: semanticType,
-        tagName: data.tagName || '',
-        attr: data.attr || '',
+        tagName: data.tagName || elementDef?.tagName || '',
+        attr: data.attr || elementDef?.attr || '',
         value: data.value || '',
-        text: data.text || '',
-        src: data.src || '',
-        href: data.href || '',
-        phone: data.phone || '',
-        message: data.message || '',
+        text: data.text || elementDef?.originalText || '',
+        src: data.src || elementDef?.originalSrc || '',
+        href: data.href || elementDef?.originalHref || '',
+        phone: data.phone || elementDef?.details?.phone || '',
+        message: data.message || elementDef?.details?.message || '',
+        cardTitle: elementDef?.details?.cardTitle,
+        buttonText: elementDef?.details?.buttonText || data.text,
       };
 
       setSelectedElement(selected);
 
-      // If WhatsApp clicked and phone was in URL, update inputs
-      if (semanticType === 'whatsapp') {
-        if (data.phone) {
-          setWhatsAppPhone(formatPhoneDisplay(data.phone));
-        }
-        if (data.message) {
-          setWhatsAppMessage(data.message);
-        }
-        setOpenAccordions((p) => ({ ...p, whatsapp: true }));
+      // Auto expand the corresponding category in the left sidebar
+      if (category) {
+        setOpenAccordions((p) => ({ ...p, [category]: true }));
+      } else if (semanticType === 'whatsapp') {
+        setOpenAccordions((p) => ({ ...p, botoes: true, contato: true, whatsapp: true }));
       } else if (semanticType === 'logo') {
         setOpenAccordions((p) => ({ ...p, identidade: true }));
       } else if (['instagram', 'facebook', 'tiktok', 'youtube'].includes(semanticType)) {
-        setOpenAccordions((p) => ({ ...p, redes: true }));
+        setOpenAccordions((p) => ({ ...p, contato: true, redes: true }));
       } else if (semanticType === 'maps') {
         setOpenAccordions((p) => ({ ...p, localizacao: true }));
-      } else if (data.fieldId) {
-        setActiveFieldId(data.fieldId);
-        if (data.fieldId === 'nome_empresa') {
-          setOpenAccordions((p) => ({ ...p, identidade: true }));
-        } else if (data.fieldId === 'headline' || data.fieldId === 'subtitulo') {
-          setOpenAccordions((p) => ({ ...p, textos: true }));
-        } else if (data.fieldId.startsWith('esp_')) {
-          setOpenAccordions((p) => ({ ...p, especialidades: true }));
-        } else if (data.fieldId.startsWith('galeria_')) {
-          setOpenAccordions((p) => ({ ...p, galeria: true }));
-        } else if (data.fieldId === 'endereco') {
-          setOpenAccordions((p) => ({ ...p, localizacao: true }));
-        } else if (data.fieldId === 'google_review') {
-          setOpenAccordions((p) => ({ ...p, google_review: true }));
-        } else if (data.fieldId === 'horario') {
-          setOpenAccordions((p) => ({ ...p, horarios: true }));
-        }
       }
+
+      // Smoothly scroll to the corresponding field in the left sidebar
+      setTimeout(() => {
+        const inputEl = document.getElementById(`field-input-${elementId}`);
+        if (inputEl) {
+          inputEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        }
+      }, 100);
     };
 
     window.addEventListener('message', handleMessage);
     return () => window.removeEventListener('message', handleMessage);
-  }, []);
+  }, [editableMap]);
 
   // Update inspector active state in iframe
   useEffect(() => {
@@ -906,7 +1097,7 @@ export const BiositeEditor: React.FC<BiositeEditorProps> = ({
       logoConfig,
       detectedProps: originalThemeInfo.cssVariables,
     });
-    return injectVisualInspectorScript(compiled, inspectorActive);
+    return injectVisualInspectorScript(compiled, inspectorActive, editableMap);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [template.id]);
 
@@ -1051,14 +1242,33 @@ export const BiositeEditor: React.FC<BiositeEditorProps> = ({
   const renderInspectorContent = () => {
     if (!selectedElement) return null;
 
-    const isWhatsApp = selectedElement.semanticType === 'whatsapp';
-    const isLogo = selectedElement.semanticType === 'logo' || selectedElement.elementId === 'logo';
-    const isImage = selectedElement.semanticType === 'image' && !isLogo;
-    const isText = selectedElement.semanticType === 'text' || selectedElement.semanticType === 'title';
-    const isInstagram = selectedElement.semanticType === 'instagram';
-    const isButton = selectedElement.semanticType === 'button';
-    const isMaps = selectedElement.semanticType === 'maps';
-    const isOtherSocial = ['facebook', 'tiktok', 'youtube'].includes(selectedElement.semanticType);
+    const matchedEl: EditableElement = editableMap.byId[selectedElement.elementId] || {
+      id: selectedElement.elementId,
+      editorType: (selectedElement.semanticType as any) || 'text',
+      category: (selectedElement.category as any) || 'textos',
+      label:
+        selectedElement.semanticType === 'whatsapp'
+          ? 'Botão WhatsApp'
+          : selectedElement.semanticType === 'card'
+          ? 'Card de Serviço'
+          : selectedElement.semanticType === 'logo'
+          ? 'Logomarca'
+          : selectedElement.text || 'Elemento Selecionado',
+      selector: '',
+      tagName: selectedElement.tagName,
+      attr: (selectedElement.attr as any) || 'text',
+      originalValue: selectedElement.value,
+      originalText: selectedElement.text,
+      originalHref: selectedElement.href,
+      originalSrc: selectedElement.src,
+      details: {
+        cardTitle: selectedElement.cardTitle,
+        buttonText: selectedElement.buttonText,
+        href: selectedElement.href,
+        phone: selectedElement.phone,
+        message: selectedElement.message,
+      },
+    };
 
     return (
       <div className="space-y-3.5">
@@ -1066,26 +1276,29 @@ export const BiositeEditor: React.FC<BiositeEditorProps> = ({
         <div className="flex items-center justify-between pb-2 border-b border-purple-500/20">
           <div className="flex items-center gap-2">
             <div className="w-7 h-7 rounded-lg bg-purple-900/50 border border-purple-500/30 flex items-center justify-center">
-              {isWhatsApp && <MessageCircle size={15} className="text-emerald-400" />}
-              {isLogo && <ImageIcon size={15} className="text-purple-400" />}
-              {isImage && <ImageIcon size={15} className="text-blue-400" />}
-              {isText && <Type size={15} className="text-amber-400" />}
-              {isInstagram && <InstagramIcon className="w-3.5 h-3.5 text-pink-400" />}
-              {isButton && <LinkIcon size={15} className="text-blue-400" />}
-              {isMaps && <MapPin size={15} className="text-rose-400" />}
-              {isOtherSocial && <Share2 size={15} className="text-indigo-400" />}
+              {matchedEl.editorType === 'whatsapp' && <MessageCircle size={15} className="text-emerald-400" />}
+              {matchedEl.editorType === 'card' && <Layers size={15} className="text-purple-400" />}
+              {matchedEl.editorType === 'logo' && <ImageIcon size={15} className="text-purple-400" />}
+              {matchedEl.editorType === 'image' && <ImageIcon size={15} className="text-blue-400" />}
+              {(matchedEl.editorType === 'text' || matchedEl.editorType === 'title') && (
+                <Type size={15} className="text-amber-400" />
+              )}
+              {matchedEl.editorType === 'instagram' && <InstagramIcon className="w-3.5 h-3.5 text-pink-400" />}
+              {matchedEl.editorType === 'button' && <LinkIcon size={15} className="text-blue-400" />}
+              {(matchedEl.editorType === 'location' || matchedEl.editorType === 'maps') && (
+                <MapPin size={15} className="text-rose-400" />
+              )}
+              {['facebook', 'tiktok', 'youtube'].includes(matchedEl.editorType) && (
+                <Share2 size={15} className="text-indigo-400" />
+              )}
+              {matchedEl.editorType === 'credential' && <Award size={15} className="text-indigo-400" />}
+              {matchedEl.editorType === 'email' && <Mail size={15} className="text-amber-400" />}
+              {matchedEl.editorType === 'phone' && <Phone size={15} className="text-emerald-400" />}
             </div>
             <div>
               <div className="flex items-center gap-1.5">
                 <h4 className="text-xs font-bold text-white uppercase tracking-wider">
-                  {isWhatsApp && 'Editar WhatsApp'}
-                  {isLogo && 'Editar Logomarca'}
-                  {isImage && 'Editar Imagem'}
-                  {isText && (selectedElement.semanticType === 'title' ? 'Editar Título' : 'Editar Texto')}
-                  {isInstagram && 'Editar Instagram'}
-                  {isButton && 'Editar Botão / Link'}
-                  {isMaps && 'Editar Localização'}
-                  {isOtherSocial && `Editar ${selectedElement.semanticType.toUpperCase()}`}
+                  {matchedEl.label}
                 </h4>
                 <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-purple-500/20 text-purple-300 border border-purple-500/30">
                   ✦ PREVIEW
@@ -1104,328 +1317,19 @@ export const BiositeEditor: React.FC<BiositeEditorProps> = ({
           </button>
         </div>
 
-        {/* 1. WHATSAPP */}
-        {isWhatsApp && (
-          <div className="space-y-3">
-            <div className="space-y-1">
-              <label className="text-[11px] font-bold text-gray-300 block">Número do WhatsApp (com DDD):</label>
-              <input
-                type="tel"
-                value={whatsAppPhone}
-                onChange={(e) => handleInspectorWhatsAppChange(e.target.value, whatsAppMessage)}
-                placeholder="(34) 99999-9999"
-                className="w-full bg-[#090814] border border-purple-500/30 rounded-xl px-3 py-2 text-xs text-white placeholder-gray-500 focus:outline-none focus:border-purple-400"
-              />
-            </div>
+        {/* Dynamic Editor for the selected element */}
+        <DynamicElementField
+          element={matchedEl}
+          customValues={customValues}
+          onValueChange={handleDynamicValueChange}
+          onFocusIframe={notifyIframeToFocus}
+          onImageUpload={handleImageFileUpload}
+          logoConfig={logoConfig}
+          onLogoConfigChange={handleLogoConfigChange}
+          isInspectorDrawer={true}
+        />
 
-            <div className="space-y-1">
-              <label className="text-[11px] font-bold text-gray-300 block">Mensagem Inicial Pré-definida:</label>
-              <textarea
-                rows={2}
-                value={whatsAppMessage}
-                onChange={(e) => handleInspectorWhatsAppChange(whatsAppPhone, e.target.value)}
-                placeholder="Olá! Vim pelo site..."
-                className="w-full bg-[#090814] border border-purple-500/30 rounded-xl p-2 text-xs text-white placeholder-gray-500 focus:outline-none focus:border-purple-400 resize-none"
-              />
-            </div>
-
-            <div className="flex items-center justify-between pt-1">
-              <a
-                href={buildWhatsAppUrl(whatsAppPhone, whatsAppMessage) || '#'}
-                target="_blank"
-                rel="noreferrer"
-                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs shadow-md transition-all active:scale-95"
-              >
-                <MessageCircle size={13} />
-                <span>TESTAR WHATSAPP</span>
-                <ExternalLink size={11} />
-              </a>
-              <span className="text-[10px] text-emerald-400 font-medium">✓ Todos os botões atualizados</span>
-            </div>
-          </div>
-        )}
-
-        {/* 2. LOGO */}
-        {isLogo && (
-          <div className="space-y-3">
-            <div className="flex items-center gap-3 bg-[#090814] p-2.5 rounded-xl border border-purple-500/20">
-              <img
-                src={customValues['logo'] || selectedElement.src || ''}
-                alt="Logo Atual"
-                className="w-16 h-16 object-contain rounded-lg bg-black/50 p-1 border border-white/10"
-              />
-              <div className="flex-1 space-y-1.5">
-                <label className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-purple-600 hover:bg-purple-500 text-white font-bold text-xs cursor-pointer shadow-md transition-all active:scale-95">
-                  <Upload size={13} />
-                  <span>FAZER UPLOAD</span>
-                  <input
-                    type="file"
-                    accept="image/*"
-                    onChange={(e) => {
-                      const file = e.target.files?.[0];
-                      if (file) {
-                        const reader = new FileReader();
-                        reader.onload = () => {
-                          if (typeof reader.result === 'string') {
-                            handleInspectorLogoChange(reader.result);
-                          }
-                        };
-                        reader.readAsDataURL(file);
-                      }
-                      e.target.value = '';
-                    }}
-                    className="hidden"
-                  />
-                </label>
-                {selectedElement.src && (
-                  <button
-                    type="button"
-                    onClick={() => handleInspectorLogoChange(selectedElement.src || '')}
-                    className="text-[10px] text-gray-400 hover:text-white flex items-center gap-1"
-                  >
-                    <RotateCcw size={10} /> Restaurar Original
-                  </button>
-                )}
-              </div>
-            </div>
-
-            <div className="space-y-1">
-              <label className="text-[11px] font-bold text-gray-300 block">Ou Cole o Link Direto da Imagem:</label>
-              <input
-                type="url"
-                value={customValues['logo'] || ''}
-                onChange={(e) => handleInspectorLogoChange(e.target.value)}
-                placeholder="https://.../logo.png"
-                className="w-full bg-[#090814] border border-purple-500/30 rounded-xl px-3 py-2 text-xs text-white placeholder-gray-500 focus:outline-none focus:border-purple-400"
-              />
-            </div>
-
-            <button
-              type="button"
-              onClick={() => {
-                const currentLogo = customValues['logo'] || selectedElement.src;
-                if (currentLogo) {
-                  setOriginalLogoSrc(currentLogo);
-                  setIsProcessingRemoval(true);
-                  setLogoModalOpen(true);
-                  setSelectedBgChoice('original');
-                  processImageBackground(currentLogo).then((res) => {
-                    setRemovedBgLogoSrc(res.dataUrl);
-                    setHasDetectedTransparency(res.hasTransparency);
-                    if (res.hasTransparency) setSelectedBgChoice('original');
-                    setIsProcessingRemoval(false);
-                  });
-                }
-              }}
-              className="w-full py-2 px-3 rounded-xl bg-purple-500/15 hover:bg-purple-500/25 border border-purple-500/30 text-purple-300 font-bold text-xs flex items-center justify-center gap-1.5 transition-all"
-            >
-              <Sparkles size={13} />
-              <span>Remover Fundo Automático</span>
-            </button>
-          </div>
-        )}
-
-        {/* 3. IMAGEM / FOTO */}
-        {isImage && (
-          <div className="space-y-3">
-            <div className="flex items-center gap-3 bg-[#090814] p-2.5 rounded-xl border border-purple-500/20">
-              <img
-                src={customValues[selectedElement.elementId] || selectedElement.src || ''}
-                alt="Imagem"
-                className="w-16 h-16 object-cover rounded-lg bg-black/50 p-0.5 border border-white/10"
-              />
-              <div className="flex-1 space-y-1.5">
-                <label className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-purple-600 hover:bg-purple-500 text-white font-bold text-xs cursor-pointer shadow-md transition-all active:scale-95">
-                  <Upload size={13} />
-                  <span>FAZER UPLOAD</span>
-                  <input
-                    type="file"
-                    accept="image/*"
-                    onChange={(e) => {
-                      const file = e.target.files?.[0];
-                      if (file) {
-                        const reader = new FileReader();
-                        reader.onload = () => {
-                          if (typeof reader.result === 'string') {
-                            handleInspectorImageChange(reader.result);
-                          }
-                        };
-                        reader.readAsDataURL(file);
-                      }
-                      e.target.value = '';
-                    }}
-                    className="hidden"
-                  />
-                </label>
-                {selectedElement.src && (
-                  <button
-                    type="button"
-                    onClick={() => handleInspectorImageChange(selectedElement.src || '')}
-                    className="text-[10px] text-gray-400 hover:text-white flex items-center gap-1"
-                  >
-                    <RotateCcw size={10} /> Restaurar Original
-                  </button>
-                )}
-              </div>
-            </div>
-
-            <div className="space-y-1">
-              <label className="text-[11px] font-bold text-gray-300 block">Ou Cole o Link da Imagem:</label>
-              <input
-                type="url"
-                value={customValues[selectedElement.elementId] || ''}
-                onChange={(e) => handleInspectorImageChange(e.target.value)}
-                placeholder="https://.../imagem.jpg"
-                className="w-full bg-[#090814] border border-purple-500/30 rounded-xl px-3 py-2 text-xs text-white placeholder-gray-500 focus:outline-none focus:border-purple-400"
-              />
-            </div>
-          </div>
-        )}
-
-        {/* 4. TEXTO / TÍTULO */}
-        {isText && (
-          <div className="space-y-2.5">
-            <div className="space-y-1">
-              <label className="text-[11px] font-bold text-gray-300 block">Conteúdo do Texto:</label>
-              <textarea
-                rows={3}
-                value={customValues[selectedElement.elementId] ?? selectedElement.text}
-                onChange={(e) => handleInspectorTextChange(e.target.value)}
-                placeholder="Digite o texto aqui..."
-                className="w-full bg-[#090814] border border-purple-500/30 rounded-xl p-2.5 text-xs text-white placeholder-gray-500 focus:outline-none focus:border-purple-400"
-              />
-            </div>
-
-            {selectedElement.text && (
-              <button
-                type="button"
-                onClick={() => handleInspectorTextChange(selectedElement.text)}
-                className="text-[10px] text-gray-400 hover:text-white flex items-center gap-1"
-              >
-                <RotateCcw size={10} /> Restaurar Texto Original
-              </button>
-            )}
-          </div>
-        )}
-
-        {/* 5. INSTAGRAM */}
-        {isInstagram && (
-          <div className="space-y-3">
-            <div className="space-y-1">
-              <label className="text-[11px] font-bold text-gray-300 block">Perfil ou Link do Instagram:</label>
-              <input
-                type="text"
-                value={socialsConfig.instagram.url || selectedElement.href || ''}
-                onChange={(e) => handleInspectorSocialChange('instagram', e.target.value)}
-                placeholder="@meuperfil ou https://instagram.com/meuperfil"
-                className="w-full bg-[#090814] border border-purple-500/30 rounded-xl px-3 py-2 text-xs text-white placeholder-gray-500 focus:outline-none focus:border-purple-400"
-              />
-            </div>
-
-            {socialsConfig.instagram.url && (
-              <a
-                href={socialsConfig.instagram.url}
-                target="_blank"
-                rel="noreferrer"
-                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-pink-600 hover:bg-pink-500 text-white font-bold text-xs shadow-md transition-all active:scale-95"
-              >
-                <InstagramIcon className="w-3.5 h-3.5" />
-                <span>TESTAR INSTAGRAM</span>
-                <ExternalLink size={11} />
-              </a>
-            )}
-          </div>
-        )}
-
-        {/* 6. BOTÃO / LINK GERAL */}
-        {isButton && (
-          <div className="space-y-3">
-            <div className="space-y-1">
-              <label className="text-[11px] font-bold text-gray-300 block">Texto do Botão:</label>
-              <input
-                type="text"
-                value={customValues[selectedElement.elementId] ?? selectedElement.text}
-                onChange={(e) => handleInspectorButtonChange(e.target.value, undefined)}
-                placeholder="Texto do botão..."
-                className="w-full bg-[#090814] border border-purple-500/30 rounded-xl px-3 py-2 text-xs text-white placeholder-gray-500 focus:outline-none focus:border-purple-400"
-              />
-            </div>
-
-            <div className="space-y-1">
-              <label className="text-[11px] font-bold text-gray-300 block">Link de Destino (URL):</label>
-              <input
-                type="text"
-                value={customValues[`${selectedElement.elementId}_href`] ?? selectedElement.href}
-                onChange={(e) => handleInspectorButtonChange(undefined, e.target.value)}
-                placeholder="https://... ou wa.me/..."
-                className="w-full bg-[#090814] border border-purple-500/30 rounded-xl px-3 py-2 text-xs text-white placeholder-gray-500 focus:outline-none focus:border-purple-400"
-              />
-            </div>
-
-            <button
-              type="button"
-              onClick={() => {
-                const waUrl = buildWhatsAppUrl(whatsAppPhone, whatsAppMessage);
-                if (waUrl) {
-                  handleInspectorButtonChange(undefined, waUrl);
-                }
-              }}
-              className="w-full py-1.5 px-3 rounded-xl bg-emerald-600/20 hover:bg-emerald-600/30 border border-emerald-500/30 text-emerald-300 font-bold text-xs flex items-center justify-center gap-1.5 transition-all"
-            >
-              <MessageCircle size={13} />
-              <span>Apontar este botão para o WhatsApp</span>
-            </button>
-          </div>
-        )}
-
-        {/* 7. LOCALIZAÇÃO / GOOGLE MAPS */}
-        {isMaps && (
-          <div className="space-y-3">
-            <div className="space-y-1">
-              <label className="text-[11px] font-bold text-gray-300 block">Link do Google Maps:</label>
-              <input
-                type="text"
-                value={customValues['maps'] || selectedElement.href || ''}
-                onChange={(e) => handleInspectorMapsChange(e.target.value)}
-                placeholder="https://maps.google.com/..."
-                className="w-full bg-[#090814] border border-purple-500/30 rounded-xl px-3 py-2 text-xs text-white placeholder-gray-500 focus:outline-none focus:border-purple-400"
-              />
-            </div>
-
-            {customValues['maps'] && (
-              <a
-                href={customValues['maps']}
-                target="_blank"
-                rel="noreferrer"
-                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-rose-600 hover:bg-rose-500 text-white font-bold text-xs shadow-md transition-all active:scale-95"
-              >
-                <MapPin size={13} />
-                <span>TESTAR MAPS</span>
-                <ExternalLink size={11} />
-              </a>
-            )}
-          </div>
-        )}
-
-        {/* 8. OUTRAS REDES SOCIAIS */}
-        {isOtherSocial && (
-          <div className="space-y-3">
-            <div className="space-y-1">
-              <label className="text-[11px] font-bold text-gray-300 block">
-                Link de {selectedElement.semanticType.toUpperCase()}:
-              </label>
-              <input
-                type="text"
-                value={customValues[selectedElement.semanticType] || selectedElement.href || ''}
-                onChange={(e) => handleInspectorSocialChange(selectedElement.semanticType, e.target.value)}
-                placeholder={`https://${selectedElement.semanticType}.com/...`}
-                className="w-full bg-[#090814] border border-purple-500/30 rounded-xl px-3 py-2 text-xs text-white placeholder-gray-500 focus:outline-none focus:border-purple-400"
-              />
-            </div>
-          </div>
-        )}
-
-        {/* 9. CORES & PALETAS PRONTAS (DROPDOWN / ACCORDION) */}
+        {/* Cores & Paletas Prontas (Quick Access Accordion) */}
         <div className="pt-2 border-t border-purple-500/20">
           <button
             type="button"
@@ -1436,7 +1340,12 @@ export const BiositeEditor: React.FC<BiositeEditorProps> = ({
               <Palette size={13} className="text-purple-400" />
               <span>✦ Cores & Paletas do Modelo</span>
             </span>
-            <ChevronDown size={14} className={`transition-transform duration-200 ${showAppearanceInInspector ? 'rotate-180' : ''}`} />
+            <ChevronDown
+              size={14}
+              className={`transition-transform duration-200 ${
+                showAppearanceInInspector ? 'rotate-180' : ''
+              }`}
+            />
           </button>
 
           {showAppearanceInInspector && (
@@ -1458,8 +1367,14 @@ export const BiositeEditor: React.FC<BiositeEditorProps> = ({
                   >
                     <div className="flex items-center gap-1.5">
                       <div className="flex -space-x-1 shrink-0">
-                        <div className="w-2.5 h-2.5 rounded-full border border-black/50" style={{ backgroundColor: pal.colors.primary }} />
-                        <div className="w-2.5 h-2.5 rounded-full border border-black/50" style={{ backgroundColor: pal.colors.bg }} />
+                        <div
+                          className="w-2.5 h-2.5 rounded-full border border-black/50"
+                          style={{ backgroundColor: pal.colors.primary }}
+                        />
+                        <div
+                          className="w-2.5 h-2.5 rounded-full border border-black/50"
+                          style={{ backgroundColor: pal.colors.bg }}
+                        />
                       </div>
                       <span className="truncate">{pal.name}</span>
                     </div>
@@ -1669,174 +1584,67 @@ export const BiositeEditor: React.FC<BiositeEditorProps> = ({
           </div>
 
           <div className="p-4 space-y-3.5 pb-20">
-            {/* 1. SEÇÃO: IDENTIDADE (NOME, LOGOMARCA & TAMANHO) */}
-            <div className="bg-[#0e0d1a] border border-purple-500/20 rounded-2xl overflow-hidden transition-all">
-              <button
-                onClick={() => toggleAccordion('identidade')}
-                className="w-full p-3.5 flex items-center justify-between text-left hover:bg-[#141224] transition-colors"
-              >
-                <div className="flex items-center gap-2">
-                  <div className="w-6 h-6 rounded-lg bg-purple-900/50 flex items-center justify-center text-purple-300">
-                    <Store size={14} />
-                  </div>
-                  <div>
-                    <h3 className="text-xs font-bold text-white uppercase tracking-wider">Identidade</h3>
-                    <p className="text-[11px] text-gray-400">Nome da empresa e logomarca principal</p>
-                  </div>
-                </div>
-                {openAccordions.identidade ? (
-                  <ChevronDown size={16} className="text-purple-400" />
-                ) : (
-                  <ChevronRight size={16} className="text-gray-500" />
-                )}
-              </button>
+            {/* SEÇÕES DINÂMICAS GERADAS AUTOMATICAMENTE DO MODELO */}
+            {editableMap.categories.map((cat) => {
+              const meta = CATEGORY_META[cat.id] || {
+                label: cat.name,
+                desc: 'Elementos personalizados deste modelo',
+                icon: <Sparkles size={14} />,
+              };
+              const isOpen = !!openAccordions[cat.id];
 
-              {openAccordions.identidade && (
-                <div className="p-4 pt-1 space-y-4 border-t border-purple-500/10">
-                  {/* Nome da Empresa */}
-                  <div className="space-y-1.5">
-                    <label className="text-xs font-bold text-gray-200 block uppercase tracking-tight">
-                      Nome da Empresa
-                    </label>
-                    <div className="text-[11px] text-gray-400 bg-[#07060f] px-2.5 py-1 rounded-md border border-white/5">
-                      Atual:{' '}
-                      <span className="text-purple-300 font-semibold">
-                        {template.fields.find((f) => f.id === 'nome_empresa')?.originalValue ||
-                          companyName}
-                      </span>
-                    </div>
-                    <input
-                      id="field-input-nome_empresa"
-                      type="text"
-                      value={customValues['nome_empresa'] ?? ''}
-                      onChange={(e) => {
-                        handleFieldChange('nome_empresa', e.target.value);
-                      }}
-                      onFocus={() => notifyIframeToFocus('nome_empresa')}
-                      placeholder="Ex: BLACK CROWN BARBER CLUB"
-                      className="w-full bg-[#07060f] border border-purple-500/30 rounded-xl px-3 py-2 text-xs text-white placeholder-gray-500 focus:outline-none focus:border-purple-500 focus:ring-1 focus:ring-purple-500"
-                    />
-                  </div>
-
-                  {/* Logomarca */}
-                  <div className="space-y-3 pt-2 border-t border-white/5">
-                    <div className="flex items-center justify-between">
-                      <label className="text-xs font-bold text-gray-200 uppercase tracking-tight">
-                        Logomarca
-                      </label>
-                      {customValues['logo'] &&
-                        customValues['logo'] !==
-                          template.fields.find((f) => f.id === 'logo')?.originalValue && (
-                          <button
-                            onClick={() => {
-                              const orig =
-                                template.fields.find((f) => f.id === 'logo')?.originalValue || '';
-                              handleFieldChange('logo', orig);
-                            }}
-                            className="text-[10px] text-purple-400 hover:text-purple-300 flex items-center gap-1"
-                          >
-                            <RotateCcw size={10} />
-                            <span>Restaurar Original</span>
-                          </button>
-                        )}
-                    </div>
-
-                    {/* Logo Active Preview */}
-                    <div className="flex items-center gap-3 bg-[#07060f] p-2.5 rounded-xl border border-purple-500/20">
-                      <div className="w-16 h-16 rounded-xl bg-[#12111d] border border-purple-500/30 p-1 flex items-center justify-center overflow-hidden shrink-0 relative bg-[radial-gradient(#222_1px,transparent_1px)] [background-size:8px_8px]">
-                        {customValues['logo'] ? (
-                          <img
-                            src={customValues['logo']}
-                            alt="Logo ativa"
-                            className="w-full h-full object-contain"
-                          />
-                        ) : (
-                          <ImageIcon size={20} className="text-gray-500" />
-                        )}
+              return (
+                <div
+                  key={cat.id}
+                  className="bg-[#0e0d1a] border border-purple-500/20 rounded-2xl overflow-hidden transition-all"
+                >
+                  <button
+                    type="button"
+                    onClick={() => toggleAccordion(cat.id)}
+                    className="w-full p-3.5 flex items-center justify-between text-left hover:bg-[#141224] transition-colors"
+                  >
+                    <div className="flex items-center gap-2">
+                      <div className="w-6 h-6 rounded-lg bg-purple-900/50 flex items-center justify-center text-purple-300">
+                        {meta.icon}
                       </div>
-                      <div className="text-[11px] text-gray-400 space-y-1">
-                        <span className="text-emerald-400 font-semibold flex items-center gap-1">
-                          <Check size={11} /> 1 Logo ativa no biosite
-                        </span>
-                        <p className="text-[10px] text-gray-400 leading-tight">
-                          Upload ou link direto. O biosite sempre exibe apenas uma logo oficial.
-                        </p>
+                      <div>
+                        <div className="flex items-center gap-2">
+                          <h3 className="text-xs font-bold text-white uppercase tracking-wider">
+                            {meta.label}
+                          </h3>
+                          <span className="text-[10px] font-mono px-1.5 py-0.2 rounded-full bg-purple-500/20 text-purple-300 border border-purple-500/30">
+                            {cat.count}
+                          </span>
+                        </div>
+                        <p className="text-[11px] text-gray-400">{meta.desc}</p>
                       </div>
                     </div>
+                    {isOpen ? (
+                      <ChevronDown size={16} className="text-purple-400" />
+                    ) : (
+                      <ChevronRight size={16} className="text-gray-500" />
+                    )}
+                  </button>
 
-                    {/* Tamanho da Logo */}
-                    <div className="space-y-1.5">
-                      <span className="text-[10px] text-gray-400 uppercase font-mono block">
-                        Tamanho da Logo:
-                      </span>
-                      <div className="grid grid-cols-3 gap-2">
-                        {(['sm', 'md', 'lg'] as const).map((s) => (
-                          <button
-                            key={s}
-                            type="button"
-                            onClick={() => handleLogoConfigChange({ size: s })}
-                            className={`py-1.5 text-xs font-semibold rounded-xl border transition-all ${
-                              logoConfig.size === s
-                                ? 'bg-purple-600 text-white border-purple-400 shadow-sm'
-                                : 'bg-[#12111d] text-gray-400 hover:text-white border-white/5'
-                            }`}
-                          >
-                            {s === 'sm' ? 'Pequeno' : s === 'md' ? 'Médio (Padrão)' : 'Grande'}
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-
-                    {/* Upload button with background detection modal */}
-                    <label className="flex items-center justify-center gap-2 w-full py-2.5 px-3 bg-[#131122] hover:bg-[#1a1730] border border-dashed border-purple-500/40 rounded-xl text-xs text-purple-300 font-semibold cursor-pointer transition-colors">
-                      <Upload size={14} />
-                      <span>Fazer Upload da Logo</span>
-                      <input
-                        type="file"
-                        accept="image/png,image/jpeg,image/webp,image/svg+xml"
-                        onChange={(e) => handleImageFileUpload('logo', e)}
-                        className="hidden"
-                      />
-                    </label>
-
-                    {/* URL Option */}
-                    <div className="space-y-1.5 pt-1">
-                      <span className="text-[10px] text-gray-400 uppercase font-mono block">
-                        Ou link direto da imagem:
-                      </span>
-                      <div className="flex gap-1.5">
-                        <input
-                          type="url"
-                          value={logoUrlInput}
-                          onChange={(e) => {
-                            setLogoUrlInput(e.target.value);
-                            setLogoUrlError('');
-                          }}
-                          placeholder="https://exemplo.com/minha-logo.png"
-                          className="flex-1 bg-[#07060f] border border-purple-500/25 rounded-xl px-3 py-1.5 text-xs text-white placeholder-gray-600 focus:outline-none focus:border-purple-500"
+                  {isOpen && (
+                    <div className="p-4 pt-2 space-y-4 border-t border-purple-500/10">
+                      {cat.elements.map((el) => (
+                        <DynamicElementField
+                          key={el.id}
+                          element={el}
+                          customValues={customValues}
+                          onValueChange={handleDynamicValueChange}
+                          onFocusIframe={notifyIframeToFocus}
+                          onImageUpload={handleImageFileUpload}
+                          logoConfig={logoConfig}
+                          onLogoConfigChange={handleLogoConfigChange}
                         />
-                        <button
-                          onClick={handleApplyLogoUrl}
-                          className="px-3 py-1.5 bg-[#17152a] hover:bg-purple-600 text-purple-200 hover:text-white rounded-xl text-xs font-semibold border border-purple-500/30 transition-all shrink-0"
-                        >
-                          Usar esta logo
-                        </button>
-                      </div>
-                      {logoUrlError && (
-                        <p className="text-[11px] text-red-400 flex items-center gap-1 mt-1">
-                          <AlertCircle size={12} /> {logoUrlError}
-                        </p>
-                      )}
-                      {logoUrlSuccess && (
-                        <p className="text-[11px] text-emerald-400 flex items-center gap-1 mt-1">
-                          <Check size={12} /> Logo atualizada com sucesso!
-                        </p>
-                      )}
+                      ))}
                     </div>
-                  </div>
+                  )}
                 </div>
-              )}
-            </div>
+              );
+            })}
 
             {/* 2. SEÇÃO: CORES & APARÊNCIA */}
             <div className="bg-[#0e0d1a] border border-purple-500/20 rounded-2xl overflow-hidden transition-all">
@@ -2072,793 +1880,6 @@ export const BiositeEditor: React.FC<BiositeEditorProps> = ({
               )}
             </div>
 
-            {/* 4. SEÇÃO: TEXTOS PRINCIPAIS */}
-            <div className="bg-[#0e0d1a] border border-purple-500/20 rounded-2xl overflow-hidden transition-all">
-              <button
-                onClick={() => toggleAccordion('textos')}
-                className="w-full p-3.5 flex items-center justify-between text-left hover:bg-[#141224] transition-colors"
-              >
-                <div className="flex items-center gap-2">
-                  <div className="w-6 h-6 rounded-lg bg-purple-900/50 flex items-center justify-center text-purple-300">
-                    <Type size={14} />
-                  </div>
-                  <div>
-                    <h3 className="text-xs font-bold text-white uppercase tracking-wider">
-                      Textos Principais
-                    </h3>
-                    <p className="text-[11px] text-gray-400">Headline e chamada de apresentação</p>
-                  </div>
-                </div>
-                {openAccordions.textos ? (
-                  <ChevronDown size={16} className="text-purple-400" />
-                ) : (
-                  <ChevronRight size={16} className="text-gray-500" />
-                )}
-              </button>
-
-              {openAccordions.textos && (
-                <div className="p-4 pt-1 space-y-4 border-t border-purple-500/10">
-                  {/* Headline */}
-                  <div className="space-y-1.5">
-                    <label className="text-xs font-bold text-gray-200 block uppercase tracking-tight">
-                      Título Principal / Headline
-                    </label>
-                    <div className="text-[11px] text-gray-400 bg-[#07060f] px-2.5 py-1 rounded-md border border-white/5">
-                      Atual:{' '}
-                      <span className="text-purple-300 font-semibold">
-                        {template.fields.find((f) => f.id === 'headline')?.originalValue ||
-                          'SEU ESTILO COMEÇA AQUI.'}
-                      </span>
-                    </div>
-                    <input
-                      id="field-input-headline"
-                      type="text"
-                      value={customValues['headline'] ?? ''}
-                      onChange={(e) => handleFieldChange('headline', e.target.value)}
-                      onFocus={() => notifyIframeToFocus('headline')}
-                      placeholder="Ex: SEU ESTILO COMEÇA AQUI."
-                      className="w-full bg-[#07060f] border border-purple-500/30 rounded-xl px-3 py-2 text-xs text-white placeholder-gray-500 focus:outline-none focus:border-purple-500 focus:ring-1 focus:ring-purple-500"
-                    />
-                  </div>
-
-                  {/* Subtítulo */}
-                  <div className="space-y-1.5 pt-2 border-t border-white/5">
-                    <label className="text-xs font-bold text-gray-200 block uppercase tracking-tight">
-                      Subtítulo / Descrição
-                    </label>
-                    <div className="text-[11px] text-gray-400 bg-[#07060f] px-2.5 py-1 rounded-md border border-white/5">
-                      Atual:{' '}
-                      <span className="text-purple-300 font-semibold">
-                        {template.fields.find((f) => f.id === 'subtitulo')?.originalValue ||
-                          'Precisão, personalidade e cuidado em cada detalhe.'}
-                      </span>
-                    </div>
-                    <textarea
-                      id="field-input-subtitulo"
-                      rows={2}
-                      value={customValues['subtitulo'] ?? ''}
-                      onChange={(e) => handleFieldChange('subtitulo', e.target.value)}
-                      onFocus={() => notifyIframeToFocus('subtitulo')}
-                      placeholder="Ex: Precisão, personalidade e cuidado em cada detalhe."
-                      className="w-full bg-[#07060f] border border-purple-500/30 rounded-xl px-3 py-2 text-xs text-white placeholder-gray-500 focus:outline-none focus:border-purple-500 focus:ring-1 focus:ring-purple-500 resize-none"
-                    />
-                  </div>
-                </div>
-              )}
-            </div>
-
-            {/* 5. SEÇÃO: ESPECIALIDADES / SERVIÇOS */}
-            {specialtyIndexes.length > 0 && (
-              <div className="bg-[#0e0d1a] border border-purple-500/20 rounded-2xl overflow-hidden transition-all">
-                <button
-                  onClick={() => toggleAccordion('especialidades')}
-                  className="w-full p-3.5 flex items-center justify-between text-left hover:bg-[#141224] transition-colors"
-                >
-                  <div className="flex items-center gap-2">
-                    <div className="w-6 h-6 rounded-lg bg-purple-900/50 flex items-center justify-center text-purple-300">
-                      <Layers size={14} />
-                    </div>
-                    <div>
-                      <h3 className="text-xs font-bold text-white uppercase tracking-wider">
-                        Especialidades ({specialtyIndexes.length})
-                      </h3>
-                      <p className="text-[11px] text-gray-400">Serviços com foto, nome, descrição e preço</p>
-                    </div>
-                  </div>
-                  {openAccordions.especialidades ? (
-                    <ChevronDown size={16} className="text-purple-400" />
-                  ) : (
-                    <ChevronRight size={16} className="text-gray-500" />
-                  )}
-                </button>
-
-                {openAccordions.especialidades && (
-                  <div className="p-4 pt-1 space-y-4 border-t border-purple-500/10">
-                    {specialtyIndexes.map((idx) => {
-                      const nameKey = `esp_${idx}_nome`;
-                      const priceKey = `esp_${idx}_preco`;
-                      const descKey = `esp_${idx}_desc`;
-                      const fotoKey = `esp_${idx}_foto`;
-
-                      const nameVal = customValues[nameKey] ?? '';
-                      const priceVal = customValues[priceKey] ?? '';
-                      const descVal = customValues[descKey] ?? '';
-                      const fotoVal = customValues[fotoKey] ?? '';
-
-                      return (
-                        <div
-                          key={idx}
-                          id={`field-input-esp_${idx}_card`}
-                          className="bg-[#07060f] p-3 rounded-xl border border-purple-500/20 space-y-2.5"
-                        >
-                          <span className="text-xs font-bold text-purple-300 uppercase block">
-                            #{idx} · {nameVal || `Item ${idx}`}
-                          </span>
-
-                          <div className="grid grid-cols-3 gap-2">
-                            <div className="col-span-2 space-y-1">
-                              <span className="text-[10px] text-gray-400 block font-mono">Nome:</span>
-                              <input
-                                id={`field-input-${nameKey}`}
-                                type="text"
-                                value={nameVal}
-                                onChange={(e) => handleFieldChange(nameKey, e.target.value)}
-                                onFocus={() => notifyIframeToFocus(nameKey)}
-                                className="w-full bg-[#12111d] border border-purple-500/25 rounded-lg px-2.5 py-1.5 text-xs text-white focus:outline-none focus:border-purple-500"
-                              />
-                            </div>
-                            <div className="space-y-1">
-                              <span className="text-[10px] text-gray-400 block font-mono">Preço:</span>
-                              <input
-                                id={`field-input-${priceKey}`}
-                                type="text"
-                                value={priceVal}
-                                onChange={(e) => handleFieldChange(priceKey, e.target.value)}
-                                onFocus={() => notifyIframeToFocus(priceKey)}
-                                className="w-full bg-[#12111d] border border-purple-500/25 rounded-lg px-2.5 py-1.5 text-xs text-white focus:outline-none focus:border-purple-500"
-                              />
-                            </div>
-                          </div>
-
-                          <div className="space-y-1">
-                            <span className="text-[10px] text-gray-400 block font-mono">Descrição:</span>
-                            <input
-                              id={`field-input-${descKey}`}
-                              type="text"
-                              value={descVal}
-                              onChange={(e) => handleFieldChange(descKey, e.target.value)}
-                              onFocus={() => notifyIframeToFocus(descKey)}
-                              className="w-full bg-[#12111d] border border-purple-500/25 rounded-lg px-2.5 py-1.5 text-xs text-white focus:outline-none focus:border-purple-500"
-                            />
-                          </div>
-
-                          {/* Foto da Especialidade */}
-                          <div className="flex items-center gap-2 pt-1 border-t border-white/5">
-                            {fotoVal && (
-                              <img
-                                src={fotoVal}
-                                alt={`Foto ${idx}`}
-                                className="w-10 h-10 rounded-lg object-cover border border-purple-500/30"
-                              />
-                            )}
-                            <label className="flex-1 py-1.5 px-2 bg-[#141224] hover:bg-[#1d1a33] border border-purple-500/30 rounded-lg text-[11px] text-purple-300 font-semibold cursor-pointer text-center transition-colors">
-                              Trocar Foto #{idx}
-                              <input
-                                type="file"
-                                accept="image/*"
-                                onChange={(e) => handleImageFileUpload(fotoKey, e)}
-                                className="hidden"
-                              />
-                            </label>
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                )}
-              </div>
-            )}
-
-            {/* 6. SEÇÃO: GALERIA DE FOTOS */}
-            {galleryFieldIds.length > 0 && (
-              <div className="bg-[#0e0d1a] border border-purple-500/20 rounded-2xl overflow-hidden transition-all">
-                <button
-                  onClick={() => toggleAccordion('galeria')}
-                  className="w-full p-3.5 flex items-center justify-between text-left hover:bg-[#141224] transition-colors"
-                >
-                  <div className="flex items-center gap-2">
-                    <div className="w-6 h-6 rounded-lg bg-purple-900/50 flex items-center justify-center text-purple-300">
-                      <ImageIcon size={14} />
-                    </div>
-                    <div>
-                      <h3 className="text-xs font-bold text-white uppercase tracking-wider">
-                        Galeria ({galleryFieldIds.length} fotos)
-                      </h3>
-                      <p className="text-[11px] text-gray-400">Miniaturas e troca de imagens</p>
-                    </div>
-                  </div>
-                  {openAccordions.galeria ? (
-                    <ChevronDown size={16} className="text-purple-400" />
-                  ) : (
-                    <ChevronRight size={16} className="text-gray-500" />
-                  )}
-                </button>
-
-                {openAccordions.galeria && (
-                  <div className="p-4 pt-1 space-y-3 border-t border-purple-500/10">
-                    <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5">
-                      {galleryFieldIds.map((key, i) => {
-                        const val = customValues[key] || '';
-                        return (
-                          <div
-                            key={key}
-                            id={`field-input-${key}`}
-                            className="bg-[#07060f] p-2 rounded-xl border border-purple-500/20 space-y-1.5 flex flex-col justify-between"
-                          >
-                            <div className="relative aspect-square rounded-lg overflow-hidden border border-purple-500/30 bg-[#12111d]">
-                              {val ? (
-                                <img
-                                  src={val}
-                                  alt={`Galeria ${i + 1}`}
-                                  className="w-full h-full object-cover"
-                                />
-                              ) : (
-                                <div className="w-full h-full flex items-center justify-center text-gray-600">
-                                  <ImageIcon size={18} />
-                                </div>
-                              )}
-                              <span className="absolute top-1 left-1 bg-black/70 text-[9px] font-mono font-bold text-white px-1.5 py-0.5 rounded">
-                                #{i + 1}
-                              </span>
-                            </div>
-
-                            <label className="block text-center py-1 px-1 bg-[#141224] hover:bg-[#1d1a33] text-[10px] font-semibold text-purple-300 rounded-lg cursor-pointer border border-purple-500/20 transition-colors">
-                              Trocar
-                              <input
-                                type="file"
-                                accept="image/*"
-                                onChange={(e) => handleImageFileUpload(key, e)}
-                                className="hidden"
-                              />
-                            </label>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  </div>
-                )}
-              </div>
-            )}
-
-            {/* 7. SEÇÃO: WHATSAPP */}
-            <div className="bg-[#0e0d1a] border border-purple-500/20 rounded-2xl overflow-hidden transition-all">
-              <button
-                onClick={() => toggleAccordion('whatsapp')}
-                className="w-full p-3.5 flex items-center justify-between text-left hover:bg-[#141224] transition-colors"
-              >
-                <div className="flex items-center gap-2">
-                  <div className="w-6 h-6 rounded-lg bg-emerald-950 flex items-center justify-center text-emerald-400">
-                    <WhatsAppIcon size={14} />
-                  </div>
-                  <div>
-                    <h3 className="text-xs font-bold text-white uppercase tracking-wider">WhatsApp</h3>
-                    <p className="text-[11px] text-gray-400">Número direto, mensagem e visibilidade</p>
-                  </div>
-                </div>
-                {openAccordions.whatsapp ? (
-                  <ChevronDown size={16} className="text-purple-400" />
-                ) : (
-                  <ChevronRight size={16} className="text-gray-500" />
-                )}
-              </button>
-
-              {openAccordions.whatsapp && (
-                <div className="p-4 pt-1 space-y-4 border-t border-purple-500/10">
-                  {/* Toggle Mostrar no Biosite */}
-                  <div className="flex items-center justify-between p-2.5 bg-[#07060f] rounded-xl border border-white/5">
-                    <span className="text-xs font-semibold text-gray-200">Mostrar no Biosite:</span>
-                    <button
-                      type="button"
-                      onClick={() =>
-                        handleSocialItemUpdate('whatsapp', {
-                          enabled: !socialsConfig.whatsapp?.enabled,
-                        })
-                      }
-                      className={`px-3 py-1 text-xs font-bold rounded-lg transition-all ${
-                        socialsConfig.whatsapp?.enabled
-                          ? 'bg-emerald-600 text-white'
-                          : 'bg-gray-800 text-gray-400'
-                      }`}
-                    >
-                      {socialsConfig.whatsapp?.enabled ? 'ATIVADO' : 'DESATIVADO'}
-                    </button>
-                  </div>
-
-                  {/* Número WhatsApp */}
-                  <div className="space-y-1.5">
-                    <label className="text-xs font-bold text-gray-200 block uppercase tracking-tight">
-                      Número do WhatsApp
-                    </label>
-                    <input
-                      id="field-input-whatsapp_phone"
-                      type="text"
-                      value={formatPhoneDisplay(whatsAppPhone)}
-                      onChange={(e) => handleWhatsAppChange(e.target.value, whatsAppMessage)}
-                      onFocus={() => notifyIframeToFocus('whatsapp')}
-                      placeholder="(31) 99999-9999"
-                      className="w-full bg-[#07060f] border border-purple-500/30 rounded-xl px-3 py-2 text-xs text-white placeholder-gray-500 focus:outline-none focus:border-purple-500 focus:ring-1 focus:ring-purple-500"
-                    />
-                    <p className="text-[10px] text-gray-400">
-                      Normalizado automaticamente para formato internacional (ex: 55{whatsAppPhone.replace(/\D/g, '')}).
-                    </p>
-                  </div>
-
-                  {/* Mensagem de Abertura */}
-                  <div className="space-y-1.5">
-                    <div className="flex items-center justify-between">
-                      <label className="text-xs font-bold text-gray-200 block uppercase tracking-tight">
-                        Mensagem de Abertura
-                      </label>
-                      <button
-                        onClick={() => {
-                          const suggested = getSuggestedWhatsAppMessage(template.nicheId, companyName);
-                          handleWhatsAppChange(whatsAppPhone, suggested);
-                        }}
-                        className="text-[10px] text-purple-400 hover:text-purple-300"
-                      >
-                        Sugerir pelo nicho
-                      </button>
-                    </div>
-                    <textarea
-                      rows={2}
-                      value={whatsAppMessage}
-                      onChange={(e) => handleWhatsAppChange(whatsAppPhone, e.target.value)}
-                      onFocus={() => notifyIframeToFocus('whatsapp')}
-                      placeholder="Olá! Vim pelo site..."
-                      className="w-full bg-[#07060f] border border-purple-500/30 rounded-xl px-3 py-2 text-xs text-white placeholder-gray-500 focus:outline-none focus:border-purple-500 resize-none"
-                    />
-                  </div>
-
-                  {/* Test button & Link preview */}
-                  <div className="p-3 bg-[#07060f] rounded-xl border border-emerald-500/20 space-y-2">
-                    <div className="flex items-center justify-between">
-                      <span className="text-[10px] font-mono text-emerald-400 font-semibold uppercase flex items-center gap-1">
-                        <Check size={11} /> Link Gerado
-                      </span>
-                      <a
-                        href={buildWhatsAppUrl(whatsAppPhone, whatsAppMessage)}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="inline-flex items-center gap-1 px-2.5 py-1 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-xs font-bold transition-all shadow-[0_2px_8px_rgba(16,185,129,0.3)]"
-                      >
-                        <span>TESTAR WHATSAPP</span>
-                        <ExternalLink size={12} />
-                      </a>
-                    </div>
-                    <div className="text-[10px] text-gray-400 font-mono truncate">
-                      {buildWhatsAppUrl(whatsAppPhone, whatsAppMessage)}
-                    </div>
-                  </div>
-                </div>
-              )}
-            </div>
-
-            {/* 8. SEÇÃO: REDES SOCIAIS (INSTAGRAM, FACEBOOK, TIKTOK, YOUTUBE) */}
-            <div className="bg-[#0e0d1a] border border-purple-500/20 rounded-2xl overflow-hidden transition-all">
-              <button
-                onClick={() => toggleAccordion('redes')}
-                className="w-full p-3.5 flex items-center justify-between text-left hover:bg-[#141224] transition-colors"
-              >
-                <div className="flex items-center gap-2">
-                  <div className="w-6 h-6 rounded-lg bg-pink-950 flex items-center justify-center text-pink-400">
-                    <Share2 size={14} />
-                  </div>
-                  <div>
-                    <h3 className="text-xs font-bold text-white uppercase tracking-wider">
-                      Redes Sociais
-                    </h3>
-                    <p className="text-[11px] text-gray-400">
-                      Instagram, Facebook, TikTok e YouTube
-                    </p>
-                  </div>
-                </div>
-                {openAccordions.redes ? (
-                  <ChevronDown size={16} className="text-purple-400" />
-                ) : (
-                  <ChevronRight size={16} className="text-gray-500" />
-                )}
-              </button>
-
-              {openAccordions.redes && (
-                <div className="p-4 pt-1 space-y-4 border-t border-purple-500/10">
-                  {/* Instagram */}
-                  <div className="p-3 bg-[#07060f] rounded-xl border border-pink-500/20 space-y-2.5">
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-2">
-                        <InstagramIcon size={14} className="text-pink-400" />
-                        <span className="text-xs font-bold text-white uppercase">Instagram</span>
-                      </div>
-                      <button
-                        type="button"
-                        onClick={() =>
-                          handleSocialItemUpdate('instagram', {
-                            enabled: !socialsConfig.instagram?.enabled,
-                          })
-                        }
-                        className={`px-2.5 py-0.5 text-[11px] font-bold rounded-lg transition-all ${
-                          socialsConfig.instagram?.enabled
-                            ? 'bg-pink-600 text-white'
-                            : 'bg-gray-800 text-gray-400'
-                        }`}
-                      >
-                        {socialsConfig.instagram?.enabled ? 'ATIVADO' : 'DESATIVADO'}
-                      </button>
-                    </div>
-
-                    <input
-                      id="field-input-instagram"
-                      type="text"
-                      value={instagramInput}
-                      onChange={(e) => handleInstagramChange(e.target.value)}
-                      onFocus={() => notifyIframeToFocus('instagram')}
-                      placeholder="@blackcrownbarber"
-                      className="w-full bg-[#12111d] border border-purple-500/25 rounded-xl px-3 py-1.5 text-xs text-white placeholder-gray-500 focus:outline-none focus:border-purple-500"
-                    />
-
-                    {instagramInput && (
-                      <div className="flex items-center justify-between pt-1">
-                        <span className="text-[10px] text-purple-300 font-mono truncate max-w-[200px]">
-                          {normalizeInstagram(instagramInput).url}
-                        </span>
-                        <a
-                          href={normalizeInstagram(instagramInput).url}
-                          target="_blank"
-                          rel="noreferrer"
-                          className="inline-flex items-center gap-1 text-[11px] text-pink-400 hover:text-pink-300 font-semibold"
-                        >
-                          <span>TESTAR LINK</span>
-                          <ExternalLink size={11} />
-                        </a>
-                      </div>
-                    )}
-                  </div>
-
-                  {/* Facebook (se ativado ou adicionado) */}
-                  {socialsConfig.facebook?.enabled && (
-                    <div className="p-3 bg-[#07060f] rounded-xl border border-blue-500/20 space-y-2.5">
-                      <div className="flex items-center justify-between">
-                        <span className="text-xs font-bold text-blue-400 uppercase">Facebook</span>
-                        <button
-                          type="button"
-                          onClick={() => handleRemoveSocialNetwork('facebook')}
-                          className="text-[11px] text-rose-400 hover:text-rose-300 flex items-center gap-1"
-                        >
-                          <Trash2 size={11} /> Remover
-                        </button>
-                      </div>
-
-                      <input
-                        type="text"
-                        value={socialsConfig.facebook.url}
-                        onChange={(e) => {
-                          const norm = normalizeFacebook(e.target.value);
-                          handleSocialItemUpdate('facebook', { url: norm });
-                        }}
-                        placeholder="https://facebook.com/minhapagina"
-                        className="w-full bg-[#12111d] border border-purple-500/25 rounded-xl px-3 py-1.5 text-xs text-white placeholder-gray-500 focus:outline-none focus:border-purple-500"
-                      />
-
-                      {socialsConfig.facebook.url && (
-                        <div className="flex justify-end pt-1">
-                          <a
-                            href={socialsConfig.facebook.url}
-                            target="_blank"
-                            rel="noreferrer"
-                            className="inline-flex items-center gap-1 text-[11px] text-blue-400 hover:text-blue-300 font-semibold"
-                          >
-                            <span>TESTAR LINK</span>
-                            <ExternalLink size={11} />
-                          </a>
-                        </div>
-                      )}
-                    </div>
-                  )}
-
-                  {/* TikTok (se ativado ou adicionado) */}
-                  {socialsConfig.tiktok?.enabled && (
-                    <div className="p-3 bg-[#07060f] rounded-xl border border-teal-500/20 space-y-2.5">
-                      <div className="flex items-center justify-between">
-                        <span className="text-xs font-bold text-teal-400 uppercase">TikTok</span>
-                        <button
-                          type="button"
-                          onClick={() => handleRemoveSocialNetwork('tiktok')}
-                          className="text-[11px] text-rose-400 hover:text-rose-300 flex items-center gap-1"
-                        >
-                          <Trash2 size={11} /> Remover
-                        </button>
-                      </div>
-
-                      <input
-                        type="text"
-                        value={socialsConfig.tiktok.url}
-                        onChange={(e) => {
-                          const norm = normalizeTikTok(e.target.value);
-                          handleSocialItemUpdate('tiktok', { url: norm.url });
-                        }}
-                        placeholder="@meutiktok ou https://tiktok.com/@meutiktok"
-                        className="w-full bg-[#12111d] border border-purple-500/25 rounded-xl px-3 py-1.5 text-xs text-white placeholder-gray-500 focus:outline-none focus:border-purple-500"
-                      />
-
-                      {socialsConfig.tiktok.url && (
-                        <div className="flex justify-end pt-1">
-                          <a
-                            href={socialsConfig.tiktok.url}
-                            target="_blank"
-                            rel="noreferrer"
-                            className="inline-flex items-center gap-1 text-[11px] text-teal-400 hover:text-teal-300 font-semibold"
-                          >
-                            <span>TESTAR LINK</span>
-                            <ExternalLink size={11} />
-                          </a>
-                        </div>
-                      )}
-                    </div>
-                  )}
-
-                  {/* YouTube (se ativado ou adicionado) */}
-                  {socialsConfig.youtube?.enabled && (
-                    <div className="p-3 bg-[#07060f] rounded-xl border border-red-500/20 space-y-2.5">
-                      <div className="flex items-center justify-between">
-                        <span className="text-xs font-bold text-red-400 uppercase">YouTube</span>
-                        <button
-                          type="button"
-                          onClick={() => handleRemoveSocialNetwork('youtube')}
-                          className="text-[11px] text-rose-400 hover:text-rose-300 flex items-center gap-1"
-                        >
-                          <Trash2 size={11} /> Remover
-                        </button>
-                      </div>
-
-                      <input
-                        type="text"
-                        value={socialsConfig.youtube.url}
-                        onChange={(e) => {
-                          const norm = normalizeYouTube(e.target.value);
-                          handleSocialItemUpdate('youtube', { url: norm });
-                        }}
-                        placeholder="https://youtube.com/@meucanal"
-                        className="w-full bg-[#12111d] border border-purple-500/25 rounded-xl px-3 py-1.5 text-xs text-white placeholder-gray-500 focus:outline-none focus:border-purple-500"
-                      />
-
-                      {socialsConfig.youtube.url && (
-                        <div className="flex justify-end pt-1">
-                          <a
-                            href={socialsConfig.youtube.url}
-                            target="_blank"
-                            rel="noreferrer"
-                            className="inline-flex items-center gap-1 text-[11px] text-red-400 hover:text-red-300 font-semibold"
-                          >
-                            <span>TESTAR LINK</span>
-                            <ExternalLink size={11} />
-                          </a>
-                        </div>
-                      )}
-                    </div>
-                  )}
-
-                  {/* Botão + ADICIONAR REDE SOCIAL */}
-                  {(!socialsConfig.facebook?.enabled ||
-                    !socialsConfig.tiktok?.enabled ||
-                    !socialsConfig.youtube?.enabled) && (
-                    <div className="pt-2">
-                      <span className="text-[10px] text-gray-400 font-mono block mb-1.5 uppercase">
-                        + Adicionar Rede Social:
-                      </span>
-                      <div className="flex flex-wrap gap-2">
-                        {!socialsConfig.facebook?.enabled && (
-                          <button
-                            type="button"
-                            onClick={() => handleAddSocialNetwork('facebook')}
-                            className="px-2.5 py-1.5 bg-[#141224] hover:bg-[#1d1a33] text-blue-300 text-xs font-semibold rounded-xl border border-blue-500/30 flex items-center gap-1 transition-all"
-                          >
-                            <Plus size={12} /> Facebook
-                          </button>
-                        )}
-                        {!socialsConfig.tiktok?.enabled && (
-                          <button
-                            type="button"
-                            onClick={() => handleAddSocialNetwork('tiktok')}
-                            className="px-2.5 py-1.5 bg-[#141224] hover:bg-[#1d1a33] text-teal-300 text-xs font-semibold rounded-xl border border-teal-500/30 flex items-center gap-1 transition-all"
-                          >
-                            <Plus size={12} /> TikTok
-                          </button>
-                        )}
-                        {!socialsConfig.youtube?.enabled && (
-                          <button
-                            type="button"
-                            onClick={() => handleAddSocialNetwork('youtube')}
-                            className="px-2.5 py-1.5 bg-[#141224] hover:bg-[#1d1a33] text-red-300 text-xs font-semibold rounded-xl border border-red-500/30 flex items-center gap-1 transition-all"
-                          >
-                            <Plus size={12} /> YouTube
-                          </button>
-                        )}
-                      </div>
-                    </div>
-                  )}
-                </div>
-              )}
-            </div>
-
-            {/* 9. SEÇÃO: LOCALIZAÇÃO & ENDEREÇO */}
-            <div className="bg-[#0e0d1a] border border-purple-500/20 rounded-2xl overflow-hidden transition-all">
-              <button
-                onClick={() => toggleAccordion('localizacao')}
-                className="w-full p-3.5 flex items-center justify-between text-left hover:bg-[#141224] transition-colors"
-              >
-                <div className="flex items-center gap-2">
-                  <div className="w-6 h-6 rounded-lg bg-amber-950 flex items-center justify-center text-amber-400">
-                    <MapPin size={14} />
-                  </div>
-                  <div>
-                    <h3 className="text-xs font-bold text-white uppercase tracking-wider">
-                      Localização & Endereço
-                    </h3>
-                    <p className="text-[11px] text-gray-400">Endereço textual e link do Google Maps</p>
-                  </div>
-                </div>
-                {openAccordions.localizacao ? (
-                  <ChevronDown size={16} className="text-purple-400" />
-                ) : (
-                  <ChevronRight size={16} className="text-gray-500" />
-                )}
-              </button>
-
-              {openAccordions.localizacao && (
-                <div className="p-4 pt-1 space-y-4 border-t border-purple-500/10">
-                  <div className="space-y-1.5">
-                    <label className="text-xs font-bold text-gray-200 block uppercase tracking-tight">
-                      Endereço Exibido no Site
-                    </label>
-                    <input
-                      id="field-input-endereco"
-                      type="text"
-                      value={customValues['endereco'] ?? ''}
-                      onChange={(e) => handleFieldChange('endereco', e.target.value)}
-                      onFocus={() => notifyIframeToFocus('endereco')}
-                      placeholder="Ex: Av. Imperial, 725 — Centro — Belo Horizonte/MG"
-                      className="w-full bg-[#07060f] border border-purple-500/30 rounded-xl px-3 py-2 text-xs text-white placeholder-gray-500 focus:outline-none focus:border-purple-500"
-                    />
-                  </div>
-
-                  <div className="space-y-1.5 pt-2 border-t border-white/5">
-                    <div className="flex items-center justify-between">
-                      <label className="text-xs font-bold text-gray-200 block uppercase tracking-tight">
-                        Link do Google Maps
-                      </label>
-                      {customValues['maps'] && (
-                        <a
-                          href={customValues['maps']}
-                          target="_blank"
-                          rel="noreferrer"
-                          className="text-[11px] text-purple-400 hover:text-purple-300 flex items-center gap-1 font-semibold"
-                        >
-                          <span>TESTAR LOCALIZAÇÃO</span>
-                          <ExternalLink size={11} />
-                        </a>
-                      )}
-                    </div>
-                    <input
-                      id="field-input-maps"
-                      type="url"
-                      value={customValues['maps'] ?? ''}
-                      onChange={(e) => handleFieldChange('maps', e.target.value)}
-                      onFocus={() => notifyIframeToFocus('maps')}
-                      placeholder="https://maps.app.goo.gl/..."
-                      className="w-full bg-[#07060f] border border-purple-500/30 rounded-xl px-3 py-2 text-xs text-white placeholder-gray-500 focus:outline-none focus:border-purple-500"
-                    />
-                  </div>
-                </div>
-              )}
-            </div>
-
-            {/* 10. SEÇÃO: GOOGLE REVIEW */}
-            <div className="bg-[#0e0d1a] border border-purple-500/20 rounded-2xl overflow-hidden transition-all">
-              <button
-                onClick={() => toggleAccordion('google_review')}
-                className="w-full p-3.5 flex items-center justify-between text-left hover:bg-[#141224] transition-colors"
-              >
-                <div className="flex items-center gap-2">
-                  <div className="w-6 h-6 rounded-lg bg-yellow-950 flex items-center justify-center text-yellow-400">
-                    <Star size={14} />
-                  </div>
-                  <div>
-                    <h3 className="text-xs font-bold text-white uppercase tracking-wider">
-                      Avaliação Google
-                    </h3>
-                    <p className="text-[11px] text-gray-400">Link para coletar avaliações 5 estrelas</p>
-                  </div>
-                </div>
-                {openAccordions.google_review ? (
-                  <ChevronDown size={16} className="text-purple-400" />
-                ) : (
-                  <ChevronRight size={16} className="text-gray-500" />
-                )}
-              </button>
-
-              {openAccordions.google_review && (
-                <div className="p-4 pt-1 space-y-3.5 border-t border-purple-500/10">
-                  <div className="space-y-1.5">
-                    <div className="flex items-center justify-between">
-                      <label className="text-xs font-bold text-gray-200 block uppercase tracking-tight">
-                        Link de Avaliação Google
-                      </label>
-                      {customValues['google_review'] && (
-                        <a
-                          href={customValues['google_review']}
-                          target="_blank"
-                          rel="noreferrer"
-                          className="text-[11px] text-yellow-400 hover:text-yellow-300 flex items-center gap-1 font-semibold"
-                        >
-                          <span>TESTAR AVALIAÇÃO</span>
-                          <ExternalLink size={11} />
-                        </a>
-                      )}
-                    </div>
-                    <input
-                      id="field-input-google_review"
-                      type="url"
-                      value={customValues['google_review'] ?? ''}
-                      onChange={(e) => handleFieldChange('google_review', e.target.value)}
-                      onFocus={() => notifyIframeToFocus('google_review')}
-                      placeholder="https://g.page/r/.../review"
-                      className="w-full bg-[#07060f] border border-purple-500/30 rounded-xl px-3 py-2 text-xs text-white placeholder-gray-500 focus:outline-none focus:border-purple-500"
-                    />
-                  </div>
-                </div>
-              )}
-            </div>
-
-            {/* 11. SEÇÃO: HORÁRIOS */}
-            <div className="bg-[#0e0d1a] border border-purple-500/20 rounded-2xl overflow-hidden transition-all">
-              <button
-                onClick={() => toggleAccordion('horarios')}
-                className="w-full p-3.5 flex items-center justify-between text-left hover:bg-[#141224] transition-colors"
-              >
-                <div className="flex items-center gap-2">
-                  <div className="w-6 h-6 rounded-lg bg-blue-950 flex items-center justify-center text-blue-400">
-                    <Clock size={14} />
-                  </div>
-                  <div>
-                    <h3 className="text-xs font-bold text-white uppercase tracking-wider">Horários</h3>
-                    <p className="text-[11px] text-gray-400">Dias e horários de funcionamento</p>
-                  </div>
-                </div>
-                {openAccordions.horarios ? (
-                  <ChevronDown size={16} className="text-purple-400" />
-                ) : (
-                  <ChevronRight size={16} className="text-gray-500" />
-                )}
-              </button>
-
-              {openAccordions.horarios && (
-                <div className="p-4 pt-1 space-y-3.5 border-t border-purple-500/10">
-                  <div className="space-y-1.5">
-                    <label className="text-xs font-bold text-gray-200 block uppercase tracking-tight">
-                      Horário de Funcionamento
-                    </label>
-                    <input
-                      id="field-input-horario"
-                      type="text"
-                      value={customValues['horario'] ?? ''}
-                      onChange={(e) => handleFieldChange('horario', e.target.value)}
-                      onFocus={() => notifyIframeToFocus('horario')}
-                      placeholder="Terça a Sábado: 09h às 20h"
-                      className="w-full bg-[#07060f] border border-purple-500/30 rounded-xl px-3 py-2 text-xs text-white placeholder-gray-500 focus:outline-none focus:border-purple-500"
-                    />
-                  </div>
-                </div>
-              )}
-            </div>
           </div>
         </aside>
 
