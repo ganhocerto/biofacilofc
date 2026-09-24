@@ -21,8 +21,10 @@ export interface ColorPalette {
     surface: string;
     primary: string;
     secondary: string;
+    accent: string;
     text: string;
     muted: string;
+    border: string;
     glow: string;
   };
 }
@@ -36,10 +38,12 @@ export const READY_PALETTES: ColorPalette[] = [
       surface: '#12111a',
       primary: '#d97706',
       secondary: '#9333ea',
+      accent: '#f59e0b',
       text: '#ffffff',
       muted: '#9ca3af',
+      border: 'rgba(255, 255, 255, 0.08)',
       glow: 'rgba(217, 119, 6, 0.35)',
-    }
+    },
   },
   {
     id: 'black_gold',
@@ -49,10 +53,12 @@ export const READY_PALETTES: ColorPalette[] = [
       surface: '#141316',
       primary: '#d4af37',
       secondary: '#f59e0b',
+      accent: '#ffd700',
       text: '#ffffff',
       muted: '#a3a3a3',
+      border: 'rgba(212, 175, 55, 0.25)',
       glow: 'rgba(212, 175, 55, 0.4)',
-    }
+    },
   },
   {
     id: 'black_electric_blue',
@@ -62,10 +68,12 @@ export const READY_PALETTES: ColorPalette[] = [
       surface: '#0e1224',
       primary: '#00d2ff',
       secondary: '#3a86ff',
+      accent: '#38bdf8',
       text: '#ffffff',
       muted: '#94a3b8',
-      glow: 'rgba(0, 210, 255, 0.4)',
-    }
+      border: 'rgba(0, 210, 255, 0.25)',
+      glow: 'rgba(0, 210, 255, 0.45)',
+    },
   },
   {
     id: 'black_red',
@@ -75,10 +83,12 @@ export const READY_PALETTES: ColorPalette[] = [
       surface: '#170b0b',
       primary: '#ef4444',
       secondary: '#dc2626',
+      accent: '#f87171',
       text: '#ffffff',
       muted: '#a8a29e',
+      border: 'rgba(239, 68, 68, 0.25)',
       glow: 'rgba(239, 68, 68, 0.4)',
-    }
+    },
   },
   {
     id: 'black_neon_purple',
@@ -88,10 +98,12 @@ export const READY_PALETTES: ColorPalette[] = [
       surface: '#120e24',
       primary: '#a855f7',
       secondary: '#c084fc',
+      accent: '#e879f9',
       text: '#ffffff',
       muted: '#cbd5e1',
+      border: 'rgba(168, 85, 247, 0.25)',
       glow: 'rgba(168, 85, 247, 0.4)',
-    }
+    },
   },
   {
     id: 'white_black',
@@ -101,10 +113,12 @@ export const READY_PALETTES: ColorPalette[] = [
       surface: '#ffffff',
       primary: '#0f172a',
       secondary: '#334155',
+      accent: '#1e293b',
       text: '#0f172a',
       muted: '#64748b',
-      glow: 'rgba(15, 23, 42, 0.15)',
-    }
+      border: 'rgba(15, 23, 42, 0.12)',
+      glow: 'rgba(15, 23, 42, 0.12)',
+    },
   },
   {
     id: 'green_premium',
@@ -114,11 +128,13 @@ export const READY_PALETTES: ColorPalette[] = [
       surface: '#0c180f',
       primary: '#10b981',
       secondary: '#059669',
+      accent: '#34d399',
       text: '#ffffff',
       muted: '#a7f3d0',
+      border: 'rgba(16, 185, 129, 0.25)',
       glow: 'rgba(16, 185, 129, 0.4)',
-    }
-  }
+    },
+  },
 ];
 
 export const SOCIAL_SVGS: Record<string, string> = {
@@ -129,19 +145,229 @@ export const SOCIAL_SVGS: Record<string, string> = {
   youtube: `<svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M23.498 6.186a3.016 3.016 0 0 0-2.122-2.136C19.505 3.545 12 3.545 12 3.545s-7.505 0-9.377.505A3.017 3.017 0 0 0 .502 6.186C0 8.07 0 12 0 12s0 3.93.502 5.814a3.016 3.016 0 0 0 2.122 2.136c1.871.505 9.376.505 9.376.505s7.505 0 9.377-.505a3.015 3.015 0 0 0 2.122-2.136C24 15.93 24 12 24 12s0-3.93-.502-5.814zM9.545 15.568V8.432L15.818 12l-6.273 3.568z"/></svg>`
 };
 
+/**
+ * Helper to convert HEX to RGB string "R, G, B" for rgba() use
+ */
+export function hexToRgb(hex: string): string {
+  if (!hex) return '168, 85, 247';
+  let c = hex.replace('#', '').trim();
+  if (c.length === 3) c = c.split('').map((x) => x + x).join('');
+  if (c.length !== 6) return '168, 85, 247';
+  const num = parseInt(c, 16);
+  if (isNaN(num)) return '168, 85, 247';
+  const r = (num >> 16) & 255;
+  const g = (num >> 8) & 255;
+  const b = num & 255;
+  return `${r}, ${g}, ${b}`;
+}
+
+/**
+ * Normalize any color format into standard 7-character #rrggbb hex for HTML5 color input
+ */
+export function normalizeToHex7(colorStr: string, fallback: string): string {
+  if (!colorStr) return fallback;
+  const trimmed = colorStr.trim();
+  if (trimmed.startsWith('#')) {
+    let c = trimmed.slice(1);
+    if (c.length === 3) {
+      c = c.split('').map((x) => x + x).join('');
+      return `#${c.toLowerCase()}`;
+    }
+    if (c.length === 6) {
+      return `#${c.toLowerCase()}`;
+    }
+    if (c.length === 8) {
+      return `#${c.slice(0, 6).toLowerCase()}`;
+    }
+    return fallback;
+  }
+  const rgbMatch = trimmed.match(/rgba?\((\d+)\s*,\s*(\d+)\s*,\s*(\d+)/i);
+  if (rgbMatch) {
+    const r = Math.min(255, Math.max(0, parseInt(rgbMatch[1], 10)));
+    const g = Math.min(255, Math.max(0, parseInt(rgbMatch[2], 10)));
+    const b = Math.min(255, Math.max(0, parseInt(rgbMatch[3], 10)));
+    const toHex = (n: number) => n.toString(16).padStart(2, '0');
+    return `#${toHex(r)}${toHex(g)}${toHex(b)}`;
+  }
+  return fallback;
+}
+
+/**
+ * Detect whether a background color is light or dark
+ */
+export function isLightColor(colorStr: string): boolean {
+  const hex = normalizeToHex7(colorStr, '#000000');
+  const c = hex.replace('#', '');
+  if (c.length !== 6) return false;
+  const r = parseInt(c.substr(0, 2), 16);
+  const g = parseInt(c.substr(2, 2), 16);
+  const b = parseInt(c.substr(4, 2), 16);
+  const luminance = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
+  return luminance > 0.6;
+}
+
+export interface ExtractedThemeInfo {
+  originalColors: {
+    bg: string;
+    surface: string;
+    primary: string;
+    secondary: string;
+    accent: string;
+    text: string;
+    muted: string;
+    border: string;
+    glow: string;
+  };
+  cssVariables: string[];
+}
+
+/**
+ * Inspect an HTML template to extract its declared CSS variables and original color scheme
+ */
+export function extractThemeInfoFromHtml(html: string): ExtractedThemeInfo {
+  const cssVariables: string[] = [];
+  const varMap: Record<string, string> = {};
+
+  // Standard high-fidelity defaults
+  let bg = '#08080c';
+  let surface = '#12111a';
+  let primary = '#d97706';
+  let secondary = '#9333ea';
+  let accent = '#f59e0b';
+  let text = '#ffffff';
+  let muted = '#9ca3af';
+  let border = 'rgba(255, 255, 255, 0.08)';
+  let glow = 'rgba(217, 119, 6, 0.35)';
+
+  if (!html) {
+    return {
+      originalColors: { bg, surface, primary, secondary, accent, text, muted, border, glow },
+      cssVariables: [],
+    };
+  }
+
+  // 1. Scan for CSS variables in all style blocks and :root declarations
+  const varRegex = /(--[a-zA-Z0-9_-]+)\s*:\s*([^;}\n]+)/g;
+  let match;
+  while ((match = varRegex.exec(html)) !== null) {
+    const varName = match[1].trim();
+    const varVal = match[2].trim();
+    if (!cssVariables.includes(varName)) {
+      cssVariables.push(varName);
+    }
+    varMap[varName.toLowerCase()] = varVal;
+  }
+
+  // Check CSS variables for known color roles
+  for (const [name, val] of Object.entries(varMap)) {
+    const isColor = val.startsWith('#') || val.startsWith('rgb') || val.startsWith('hsl');
+    if (!isColor) continue;
+
+    if (
+      name.includes('primary') ||
+      name.includes('gold') ||
+      name.includes('brand') ||
+      name.includes('destaque') ||
+      name === '--cor-1' ||
+      name === '--main-color'
+    ) {
+      primary = normalizeToHex7(val, primary);
+    } else if (name.includes('secondary') || name.includes('secundaria') || name === '--cor-2') {
+      secondary = normalizeToHex7(val, secondary);
+    } else if (name.includes('accent')) {
+      accent = normalizeToHex7(val, accent);
+    } else if (name.includes('bg') || name.includes('background') || name.includes('fundo')) {
+      bg = normalizeToHex7(val, bg);
+    } else if (name.includes('surface') || name.includes('card') || name.includes('box') || name.includes('panel')) {
+      surface = normalizeToHex7(val, surface);
+    } else if (name.includes('text') || name.includes('texto') || name.includes('foreground')) {
+      text = normalizeToHex7(val, text);
+    } else if (name.includes('muted') || name.includes('sub') || name.includes('gray')) {
+      muted = normalizeToHex7(val, muted);
+    } else if (name.includes('border') || name.includes('borda')) {
+      border = val;
+    } else if (name.includes('glow') || name.includes('shadow')) {
+      glow = val;
+    }
+  }
+
+  // 2. Scan style tags for direct CSS rules if variables were not defined
+  try {
+    const parser = new DOMParser();
+    const doc = parser.parseFromString(html, 'text/html');
+    const styles = Array.from(doc.querySelectorAll('style'))
+      .map((s) => s.textContent || '')
+      .join('\n');
+
+    // Check body background
+    const bodyBgMatch = styles.match(/body\s*\{[^}]*?background(?:-color)?\s*:\s*([^;}\n]+)/i);
+    if (bodyBgMatch && (bodyBgMatch[1].startsWith('#') || bodyBgMatch[1].startsWith('rgb'))) {
+      bg = normalizeToHex7(bodyBgMatch[1], bg);
+    }
+
+    // Check body text color
+    const bodyColorMatch = styles.match(/body\s*\{[^}]*?color\s*:\s*([^;}\n]+)/i);
+    if (bodyColorMatch && (bodyColorMatch[1].startsWith('#') || bodyColorMatch[1].startsWith('rgb'))) {
+      text = normalizeToHex7(bodyColorMatch[1], text);
+    }
+
+    // Check primary button background
+    const btnMatch = styles.match(
+      /(?:\.btn|button|\.cta|\.btn-primary)\s*\{[^}]*?background(?:-color)?\s*:\s*([^;}\n]+)/i
+    );
+    if (btnMatch && (btnMatch[1].startsWith('#') || btnMatch[1].startsWith('rgb'))) {
+      primary = normalizeToHex7(btnMatch[1], primary);
+    }
+
+    // Check card background
+    const cardMatch = styles.match(
+      /(?:\.card|\.box|\.item|\.specialty-card)\s*\{[^}]*?background(?:-color)?\s*:\s*([^;}\n]+)/i
+    );
+    if (cardMatch && (cardMatch[1].startsWith('#') || cardMatch[1].startsWith('rgb'))) {
+      surface = normalizeToHex7(cardMatch[1], surface);
+    }
+  } catch {
+    // Ignore DOM parsing errors
+  }
+
+  // Derive glow and accent if needed
+  const primaryRgb = hexToRgb(primary);
+  if (!glow || glow.includes('217, 119, 6')) {
+    glow = `rgba(${primaryRgb}, 0.35)`;
+  }
+  if (!accent) {
+    accent = primary;
+  }
+
+  return {
+    originalColors: {
+      bg,
+      surface,
+      primary,
+      secondary,
+      accent,
+      text,
+      muted,
+      border,
+      glow,
+    },
+    cssVariables,
+  };
+}
+
+/**
+ * Universal Theme CSS Generator
+ * Generates both CSS variable overrides and smart universal element selectors
+ * so ready palettes and custom colors work flawlessly on ANY biosite HTML (including pasted/imported HTML)
+ */
 export function generateThemeCss(
   colors?: Record<string, string>,
   iconStyle: IconStyleType = 'original',
-  logoConfig?: LogoConfig
+  logoConfig?: LogoConfig,
+  isOriginal: boolean = false,
+  extraCssProps: string[] = []
 ): string {
-  const bg = colors?.['bg'] || '#08080c';
-  const surface = colors?.['surface'] || '#12111a';
-  const primary = colors?.['primary'] || '#d97706';
-  const secondary = colors?.['secondary'] || '#9333ea';
-  const text = colors?.['text'] || '#ffffff';
-  const muted = colors?.['muted'] || '#9ca3af';
-  const glow = colors?.['glow'] || 'rgba(217, 119, 6, 0.35)';
-
+  // 1. Icon Styles
   let iconCss = '';
   switch (iconStyle) {
     case 'minimal':
@@ -229,6 +455,7 @@ export function generateThemeCss(
       iconCss = '';
   }
 
+  // 2. Logo Size Config
   let logoSizeCss = '';
   if (logoConfig?.size === 'sm') {
     logoSizeCss = `
@@ -242,39 +469,198 @@ export function generateThemeCss(
     `;
   }
 
+  // When "Original do Modelo" is active, DO NOT override colors!
+  // This allows the imported HTML's native design and colors to render 100% authentically.
+  if (isOriginal) {
+    return `${iconCss}\n${logoSizeCss}`;
+  }
+
+  const bg = colors?.['bg'] || '#08080c';
+  const surface = colors?.['surface'] || '#12111a';
+  const primary = colors?.['primary'] || '#d97706';
+  const secondary = colors?.['secondary'] || '#9333ea';
+  const accent = colors?.['accent'] || primary;
+  const text = colors?.['text'] || '#ffffff';
+  const muted = colors?.['muted'] || '#9ca3af';
+  const border = colors?.['border'] || (isLightColor(bg) ? 'rgba(15, 23, 42, 0.12)' : 'rgba(255, 255, 255, 0.1)');
+  const glow = colors?.['glow'] || `rgba(${hexToRgb(primary)}, 0.4)`;
+
+  const primaryRgb = hexToRgb(primary);
+  const secondaryRgb = hexToRgb(secondary);
+  const surfaceRgb = hexToRgb(surface);
+  const bgRgb = hexToRgb(bg);
+  const isLight = isLightColor(bg);
+
+  // Map extra detected variable names from the imported HTML
+  const customVariablesMapping = (extraCssProps || [])
+    .map((prop) => {
+      const p = prop.toLowerCase();
+      let val = primary;
+      if (p.includes('bg') || p.includes('fundo') || p.includes('background')) val = bg;
+      else if (p.includes('surface') || p.includes('card') || p.includes('box') || p.includes('panel')) val = surface;
+      else if (p.includes('text') || p.includes('texto') || p.includes('foreground')) val = text;
+      else if (p.includes('muted') || p.includes('secondary-text')) val = muted;
+      else if (p.includes('secondary') || p.includes('secundaria')) val = secondary;
+      else if (p.includes('border') || p.includes('borda')) val = border;
+      else if (p.includes('glow') || p.includes('shadow')) val = glow;
+      return `${prop}: ${val} !important;`;
+    })
+    .join('\n    ');
+
   return `
     :root {
+      /* Bio Fácil Core Tokens */
       --bio-bg: ${bg};
       --bio-surface: ${surface};
       --bio-primary: ${primary};
       --bio-secondary: ${secondary};
+      --bio-accent: ${accent};
       --bio-text: ${text};
       --bio-muted: ${muted};
+      --bio-border: ${border};
       --bio-glow: ${glow};
+      --bio-primary-rgb: ${primaryRgb};
+      --bio-secondary-rgb: ${secondaryRgb};
+      --bio-surface-rgb: ${surfaceRgb};
+      --bio-bg-rgb: ${bgRgb};
+
+      /* Universal Template CSS Variables */
+      --primary: ${primary};
+      --primary-color: ${primary};
+      --color-primary: ${primary};
+      --theme-primary: ${primary};
+      --brand-primary: ${primary};
+      --main-color: ${primary};
+      --brand: ${primary};
+      --accent: ${accent};
+      --accent-color: ${accent};
+      --color-accent: ${accent};
+      --gold: ${primary};
+      --highlight: ${primary};
+      --cor-primaria: ${primary};
+      --cor-destaque: ${primary};
+
+      --secondary: ${secondary};
+      --secondary-color: ${secondary};
+      --color-secondary: ${secondary};
+      --theme-secondary: ${secondary};
+      --cor-secundaria: ${secondary};
+
+      --bg: ${bg};
+      --bg-color: ${bg};
+      --background: ${bg};
+      --background-color: ${bg};
+      --color-bg: ${bg};
+      --color-background: ${bg};
+      --body-bg: ${bg};
+      --main-bg: ${bg};
+      --cor-fundo: ${bg};
+
+      --surface: ${surface};
+      --surface-color: ${surface};
+      --card: ${surface};
+      --card-bg: ${surface};
+      --card-background: ${surface};
+      --box-bg: ${surface};
+      --panel-bg: ${surface};
+      --cor-card: ${surface};
+
+      --text: ${text};
+      --text-color: ${text};
+      --color-text: ${text};
+      --foreground: ${text};
+      --color-foreground: ${text};
+      --cor-texto: ${text};
+
+      --muted: ${muted};
+      --muted-color: ${muted};
+      --text-muted: ${muted};
+      --color-muted: ${muted};
+      --secondary-text: ${muted};
+
+      --border: ${border};
+      --border-color: ${border};
+      --card-border: ${border};
+
+      --glow: ${glow};
+      --shadow-color: ${glow};
+
+      ${customVariablesMapping}
     }
-    body {
-      background: var(--bio-bg) !important;
+
+    /* 1. Universal Background */
+    html, body {
+      background-color: var(--bio-bg) !important;
       color: var(--bio-text) !important;
     }
-    .headline, .section-header, .specialty-price, .company-name-accent {
+    .page-wrapper, .site-wrapper, .wrapper, .main, #main, #root, #app, .app, 
+    .container-main, .bio-container, .biosite-container, .content-wrapper,
+    [class*="page-container"], [class*="site-container"], [class*="container-fluid"] {
+      background-color: var(--bio-bg) !important;
+    }
+
+    /* 2. Text & Headings */
+    .muted, .text-muted, [class*="muted"], .subtitle, .subtitulo, .description, .bio, p.bio {
+      color: var(--bio-muted) !important;
+    }
+    .headline, .section-header, .company-name-accent, [class*="highlight"], [class*="accent"],
+    .featured-text, .destaque, .specialty-price, .price, [class*="price"], .rating-stars, [class*="star"] svg {
       color: var(--bio-primary) !important;
     }
-    .section-header span {
-      background: var(--bio-glow) !important;
+    .section-header span, .headline span, .badge, [class*="badge"], .tag, [class*="tag"] {
+      background: rgba(var(--bio-primary-rgb), 0.15) !important;
       color: var(--bio-primary) !important;
+      border-color: rgba(var(--bio-primary-rgb), 0.3) !important;
     }
-    .specialty-card, .info-card {
-      background: var(--bio-surface) !important;
-      border-color: rgba(255, 255, 255, 0.08) !important;
+    [class*="gradient-text"], [class*="text-gradient"] {
+      background: linear-gradient(135deg, var(--bio-primary), var(--bio-secondary)) !important;
+      -webkit-background-clip: text !important;
+      -webkit-text-fill-color: transparent !important;
     }
+
+    /* 3. Surface, Cards & Lists */
+    .card, [class*="card"], [class*="card-"], [class*="-card"],
+    .specialty-card, .info-card, .service-item, .price-card, .product-card,
+    .item-card, .box, [class*="box-"], .panel, [class*="panel-"],
+    .link-card, .links a:not([class*="btn"]):not([class*="button"]), .menu-item, .testimonial-card,
+    [class*="review-card"], [class*="service-card"] {
+      background-color: var(--bio-surface) !important;
+      border-color: var(--bio-border) !important;
+    }
+
+    /* 4. Action Buttons & CTAs */
+    .btn-primary, .cta-main, .cta, [class*="cta-btn"], [class*="btn-primary"], [class*="btn_primary"],
+    button.primary, a.cta, .primary-button, .action-btn, [class*="action-button"],
+    .link-button, .custom-button, .botao-principal, .btn-main, .cta-btn,
+    button:not([class*="close"]):not([class*="tab"]):not([class*="toggle"]):not([class*="secondary"]):not(.social-btn),
+    .btn:not([class*="secondary"]):not([class*="outline"]):not([class*="ghost"]) {
+      background: linear-gradient(135deg, var(--bio-primary), var(--bio-secondary)) !important;
+      color: ${isLight ? '#0f172a' : '#ffffff'} !important;
+      border-color: var(--bio-primary) !important;
+      box-shadow: 0 8px 25px -4px var(--bio-glow) !important;
+    }
+
+    /* 5. Outlined Buttons & Secondary Links */
+    .btn-secondary, [class*="btn-secondary"], [class*="outline"], [class*="btn-outline"] {
+      border-color: var(--bio-primary) !important;
+      color: var(--bio-primary) !important;
+      background: transparent !important;
+    }
+
+    /* 6. Glowing borders & effects */
+    [class*="glow"], .glow-effect {
+      box-shadow: 0 0 25px var(--bio-glow) !important;
+    }
+    hr, .divider, [class*="divider"] {
+      border-color: var(--bio-border) !important;
+    }
+
+    /* 7. Built-in template logo & accents */
     .logo-wrapper {
       background: linear-gradient(135deg, var(--bio-primary), var(--bio-secondary), var(--bio-primary)) !important;
       box-shadow: 0 8px 30px var(--bio-glow) !important;
     }
-    .cta-main {
-      background: linear-gradient(135deg, var(--bio-primary), var(--bio-secondary)) !important;
-      box-shadow: 0 8px 25px -4px var(--bio-glow) !important;
-    }
+
     ${iconCss}
     ${logoSizeCss}
   `;
@@ -582,9 +968,11 @@ export function compileBiositeHtml(
   customValues: Record<string, string>,
   options?: {
     customColors?: Record<string, string>;
+    selectedPalette?: string;
     iconStyle?: IconStyleType;
     socialsConfig?: Record<string, SocialItemConfig>;
     logoConfig?: LogoConfig;
+    detectedProps?: string[];
   }
 ): string {
   const parser = new DOMParser();
@@ -647,23 +1035,39 @@ export function compileBiositeHtml(
   }
 
   // 3. Inject Theme CSS (Colors, Palettes, Icon Styles, Logo Dimensions)
+  const isOriginal = options?.selectedPalette === 'original';
+  const detectedTheme = extractThemeInfoFromHtml(templateHtml);
+  const extraProps = options?.detectedProps || detectedTheme.cssVariables;
+
   const themeCss = generateThemeCss(
     options?.customColors,
     options?.iconStyle || 'original',
-    options?.logoConfig
+    options?.logoConfig,
+    isOriginal,
+    extraProps
   );
 
-  let styleTag = doc.getElementById('bio-custom-theme');
+  let styleTag =
+    (doc.getElementById('biofacil-theme-override') as HTMLStyleElement) ||
+    (doc.getElementById('bio-custom-theme') as HTMLStyleElement);
+
   if (!styleTag) {
     styleTag = doc.createElement('style');
-    styleTag.setAttribute('id', 'bio-custom-theme');
+    styleTag.setAttribute('id', 'biofacil-theme-override');
     if (doc.head) {
       doc.head.appendChild(styleTag);
     } else if (doc.body) {
       doc.body.insertBefore(styleTag, doc.body.firstChild);
     }
+  } else {
+    styleTag.setAttribute('id', 'biofacil-theme-override');
   }
   styleTag.textContent = themeCss;
+
+  if (options?.customColors?.['bg'] && !isOriginal && doc.body) {
+    doc.body.style.setProperty('background-color', options.customColors['bg'], 'important');
+    doc.body.style.setProperty('color', options.customColors['text'] || '#ffffff', 'important');
+  }
 
   return '<!DOCTYPE html>\n' + doc.documentElement.outerHTML;
 }

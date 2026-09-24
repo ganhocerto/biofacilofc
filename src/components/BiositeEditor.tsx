@@ -20,6 +20,8 @@ import {
   normalizeYouTube,
   READY_PALETTES,
   generateThemeCss,
+  extractThemeInfoFromHtml,
+  normalizeToHex7,
   SOCIAL_SVGS,
 } from '../utils/htmlAnalyzer';
 import { processImageBackground } from '../utils/imageProcess';
@@ -146,21 +148,18 @@ export const BiositeEditor: React.FC<BiositeEditorProps> = ({
     return initial;
   });
 
+  // Extracted original theme from HTML template
+  const originalThemeInfo = useMemo(() => {
+    return extractThemeInfoFromHtml(template.htmlContent);
+  }, [template.htmlContent]);
+
   // Colors & Appearance State
   const defaultColors = useMemo(() => {
-    return {
-      bg: '#08080c',
-      surface: '#12111a',
-      primary: '#d97706',
-      secondary: '#9333ea',
-      text: '#ffffff',
-      muted: '#9ca3af',
-      glow: 'rgba(217, 119, 6, 0.35)',
-    };
-  }, []);
+    return originalThemeInfo.originalColors;
+  }, [originalThemeInfo]);
 
   const [customColors, setCustomColors] = useState<Record<string, string>>(() => {
-    return existingProject?.customColors || defaultColors;
+    return existingProject?.customColors || originalThemeInfo.originalColors;
   });
 
   const [selectedPalette, setSelectedPalette] = useState<string>(
@@ -284,19 +283,47 @@ export const BiositeEditor: React.FC<BiositeEditorProps> = ({
    * Update theme CSS variables & styles dynamically in the preview iframe
    */
   const updateIframeTheme = useCallback(
-    (colors: Record<string, string>, currentIconStyle: IconStyleType, currentLogoConfig?: LogoConfig) => {
+    (
+      colors: Record<string, string>,
+      currentIconStyle: IconStyleType,
+      currentLogoConfig?: LogoConfig,
+      isOriginal: boolean = false
+    ) => {
       const doc = iframeRef.current?.contentDocument;
       if (!doc) return;
-      let styleEl = doc.getElementById('bio-custom-theme');
+      let styleEl =
+        (doc.getElementById('biofacil-theme-override') as HTMLStyleElement) ||
+        (doc.getElementById('bio-custom-theme') as HTMLStyleElement);
+
       if (!styleEl) {
         styleEl = doc.createElement('style');
-        styleEl.setAttribute('id', 'bio-custom-theme');
+        styleEl.setAttribute('id', 'biofacil-theme-override');
         if (doc.head) doc.head.appendChild(styleEl);
         else if (doc.body) doc.body.insertBefore(styleEl, doc.body.firstChild);
+      } else {
+        styleEl.setAttribute('id', 'biofacil-theme-override');
       }
-      styleEl.textContent = generateThemeCss(colors, currentIconStyle, currentLogoConfig);
+
+      styleEl.textContent = generateThemeCss(
+        colors,
+        currentIconStyle,
+        currentLogoConfig,
+        isOriginal,
+        originalThemeInfo.cssVariables
+      );
+
+      // Directly apply body background & text inline for immediate preview responsiveness
+      if (doc.body) {
+        if (!isOriginal && colors?.bg) {
+          doc.body.style.setProperty('background-color', colors.bg, 'important');
+          doc.body.style.setProperty('color', colors.text || '#ffffff', 'important');
+        } else if (isOriginal) {
+          doc.body.style.removeProperty('background-color');
+          doc.body.style.removeProperty('color');
+        }
+      }
     },
-    []
+    [originalThemeInfo]
   );
 
   /**
@@ -345,17 +372,22 @@ export const BiositeEditor: React.FC<BiositeEditorProps> = ({
     setSelectedPalette('custom');
     const newColors = { ...customColors, [key]: value };
     setCustomColors(newColors);
-    updateIframeTheme(newColors, iconStyle, logoConfig);
+    updateIframeTheme(newColors, iconStyle, logoConfig, false);
   };
 
   // Handle Ready Palette Selection
   const handleSelectPalette = (paletteId: string) => {
     markModified();
     setSelectedPalette(paletteId);
+    if (paletteId === 'original') {
+      setCustomColors(defaultColors);
+      updateIframeTheme(defaultColors, iconStyle, logoConfig, true);
+      return;
+    }
     const pal = READY_PALETTES.find((p) => p.id === paletteId);
     if (pal) {
       setCustomColors(pal.colors);
-      updateIframeTheme(pal.colors, iconStyle, logoConfig);
+      updateIframeTheme(pal.colors, iconStyle, logoConfig, false);
     }
   };
 
@@ -364,14 +396,14 @@ export const BiositeEditor: React.FC<BiositeEditorProps> = ({
     markModified();
     setSelectedPalette('original');
     setCustomColors(defaultColors);
-    updateIframeTheme(defaultColors, iconStyle, logoConfig);
+    updateIframeTheme(defaultColors, iconStyle, logoConfig, true);
   };
 
   // Handle Icon Style Change
   const handleIconStyleChange = (style: IconStyleType) => {
     markModified();
     setIconStyle(style);
-    updateIframeTheme(customColors, style, logoConfig);
+    updateIframeTheme(customColors, style, logoConfig, selectedPalette === 'original');
   };
 
   // Handle Logo Config Change (size, align)
@@ -379,7 +411,7 @@ export const BiositeEditor: React.FC<BiositeEditorProps> = ({
     markModified();
     const updated = { ...logoConfig, ...newConfig };
     setLogoConfig(updated);
-    updateIframeTheme(customColors, iconStyle, updated);
+    updateIframeTheme(customColors, iconStyle, updated, selectedPalette === 'original');
   };
 
   // Handle WhatsApp change
@@ -581,9 +613,11 @@ export const BiositeEditor: React.FC<BiositeEditorProps> = ({
   const initialHtml = useMemo(() => {
     const compiled = compileBiositeHtml(template.htmlContent, template.fields, customValues, {
       customColors,
+      selectedPalette,
       iconStyle,
       socialsConfig,
       logoConfig,
+      detectedProps: originalThemeInfo.cssVariables,
     });
     return injectVisualInspectorScript(compiled, inspectorActive);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -604,9 +638,11 @@ export const BiositeEditor: React.FC<BiositeEditorProps> = ({
         customValues,
         {
           customColors,
+          selectedPalette,
           iconStyle,
           socialsConfig,
           logoConfig,
+          detectedProps: originalThemeInfo.cssVariables,
         }
       );
 
@@ -652,9 +688,11 @@ export const BiositeEditor: React.FC<BiositeEditorProps> = ({
         customValues,
         {
           customColors,
+          selectedPalette,
           iconStyle,
           socialsConfig,
           logoConfig,
+          detectedProps: originalThemeInfo.cssVariables,
         }
       );
       const manifest = {
@@ -681,9 +719,11 @@ export const BiositeEditor: React.FC<BiositeEditorProps> = ({
       customValues,
       {
         customColors,
+        selectedPalette,
         iconStyle,
         socialsConfig,
         logoConfig,
+        detectedProps: originalThemeInfo.cssVariables,
       }
     );
     const blob = new Blob([cleanCompiled], { type: 'text/html;charset=utf-8' });
@@ -706,9 +746,11 @@ export const BiositeEditor: React.FC<BiositeEditorProps> = ({
       customValues,
       {
         customColors,
+        selectedPalette,
         iconStyle,
         socialsConfig,
         logoConfig,
+        detectedProps: originalThemeInfo.cssVariables,
       }
     );
     await navigator.clipboard.writeText(cleanCompiled);
@@ -1111,6 +1153,7 @@ export const BiositeEditor: React.FC<BiositeEditorProps> = ({
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                       {READY_PALETTES.map((pal) => {
                         const isSelected = selectedPalette === pal.id;
+                        const colorsToShow = pal.id === 'original' ? defaultColors : pal.colors;
                         return (
                           <button
                             key={pal.id}
@@ -1128,15 +1171,15 @@ export const BiositeEditor: React.FC<BiositeEditorProps> = ({
                             <div className="flex items-center -space-x-1 shrink-0">
                               <span
                                 className="w-4 h-4 rounded-full border border-black/50 shadow-sm"
-                                style={{ backgroundColor: pal.colors.primary }}
+                                style={{ backgroundColor: colorsToShow.primary }}
                               />
                               <span
                                 className="w-4 h-4 rounded-full border border-black/50 shadow-sm"
-                                style={{ backgroundColor: pal.colors.secondary }}
+                                style={{ backgroundColor: colorsToShow.secondary }}
                               />
                               <span
                                 className="w-4 h-4 rounded-full border border-black/50 shadow-sm"
-                                style={{ backgroundColor: pal.colors.bg }}
+                                style={{ backgroundColor: colorsToShow.bg }}
                               />
                             </div>
                           </button>
@@ -1158,12 +1201,12 @@ export const BiositeEditor: React.FC<BiositeEditorProps> = ({
                         <div className="flex items-center gap-2">
                           <input
                             type="color"
-                            value={customColors.primary || '#d97706'}
+                            value={normalizeToHex7(customColors.primary, defaultColors.primary || '#d97706')}
                             onChange={(e) => handleColorChange('primary', e.target.value)}
                             className="w-8 h-8 rounded-lg cursor-pointer bg-transparent border-0"
                           />
                           <span className="text-xs font-mono text-gray-300">
-                            {customColors.primary || '#d97706'}
+                            {customColors.primary || defaultColors.primary}
                           </span>
                         </div>
                       </div>
@@ -1174,12 +1217,12 @@ export const BiositeEditor: React.FC<BiositeEditorProps> = ({
                         <div className="flex items-center gap-2">
                           <input
                             type="color"
-                            value={customColors.secondary || '#9333ea'}
+                            value={normalizeToHex7(customColors.secondary, defaultColors.secondary || '#9333ea')}
                             onChange={(e) => handleColorChange('secondary', e.target.value)}
                             className="w-8 h-8 rounded-lg cursor-pointer bg-transparent border-0"
                           />
                           <span className="text-xs font-mono text-gray-300">
-                            {customColors.secondary || '#9333ea'}
+                            {customColors.secondary || defaultColors.secondary}
                           </span>
                         </div>
                       </div>
@@ -1190,12 +1233,12 @@ export const BiositeEditor: React.FC<BiositeEditorProps> = ({
                         <div className="flex items-center gap-2">
                           <input
                             type="color"
-                            value={customColors.bg || '#08080c'}
+                            value={normalizeToHex7(customColors.bg, defaultColors.bg || '#08080c')}
                             onChange={(e) => handleColorChange('bg', e.target.value)}
                             className="w-8 h-8 rounded-lg cursor-pointer bg-transparent border-0"
                           />
                           <span className="text-xs font-mono text-gray-300">
-                            {customColors.bg || '#08080c'}
+                            {customColors.bg || defaultColors.bg}
                           </span>
                         </div>
                       </div>
@@ -1206,12 +1249,12 @@ export const BiositeEditor: React.FC<BiositeEditorProps> = ({
                         <div className="flex items-center gap-2">
                           <input
                             type="color"
-                            value={customColors.text || '#ffffff'}
+                            value={normalizeToHex7(customColors.text, defaultColors.text || '#ffffff')}
                             onChange={(e) => handleColorChange('text', e.target.value)}
                             className="w-8 h-8 rounded-lg cursor-pointer bg-transparent border-0"
                           />
                           <span className="text-xs font-mono text-gray-300">
-                            {customColors.text || '#ffffff'}
+                            {customColors.text || defaultColors.text}
                           </span>
                         </div>
                       </div>
