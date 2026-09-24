@@ -60,7 +60,24 @@ import {
   X,
   FileCode,
   Share2,
+  MessageCircle,
+  Link as LinkIcon,
 } from 'lucide-react';
+
+export interface SelectedInspectorElement {
+  elementId: string;
+  fieldId?: string;
+  bioEid?: string;
+  semanticType: 'whatsapp' | 'logo' | 'image' | 'text' | 'title' | 'instagram' | 'facebook' | 'tiktok' | 'youtube' | 'maps' | 'button' | 'phone' | 'email';
+  tagName: string;
+  attr: string;
+  value: string;
+  text: string;
+  src?: string;
+  href?: string;
+  phone?: string;
+  message?: string;
+}
 
 interface BiositeEditorProps {
   template: BiositeTemplate;
@@ -120,6 +137,10 @@ export const BiositeEditor: React.FC<BiositeEditorProps> = ({
   // Active focused field from inspector
   const [activeFieldId, setActiveFieldId] = useState<string | null>(null);
 
+  // Direct Interactive Visual Preview Inspector State
+  const [selectedElement, setSelectedElement] = useState<SelectedInspectorElement | null>(null);
+  const [showAppearanceInInspector, setShowAppearanceInInspector] = useState(false);
+
   // Logo URL temporary input & error
   const [logoUrlInput, setLogoUrlInput] = useState('');
   const [logoUrlError, setLogoUrlError] = useState('');
@@ -145,6 +166,9 @@ export const BiositeEditor: React.FC<BiositeEditorProps> = ({
     template.fields.forEach((f) => {
       initial[f.id] = existingProject?.customValues?.[f.id] ?? f.originalValue ?? '';
     });
+    if (existingProject?.customValues) {
+      Object.assign(initial, existingProject.customValues);
+    }
     return initial;
   });
 
@@ -235,14 +259,118 @@ export const BiositeEditor: React.FC<BiositeEditorProps> = ({
   };
 
   /**
-   * Directly update DOM elements in the preview iframe WITHOUT full reload
+   * Directly update DOM elements in the preview iframe WITHOUT full reload.
+   * Single source of truth: ensures WhatsApp updates all WhatsApp links,
+   * Logo updates all logo images, and all semantic/id/selector queries succeed instantly.
    */
   const updateIframeDom = useCallback(
-    (fieldId: string, value: string) => {
+    (targetKey: string, value: string, attr?: 'text' | 'src' | 'href', semanticType?: string) => {
+      // 1. Post message to iframe inspector bridge
+      iframeRef.current?.contentWindow?.postMessage(
+        {
+          type: 'BIO_FACIL_UPDATE_DOM_ELEMENT',
+          elementId: targetKey,
+          semanticType: semanticType,
+          value: value,
+          attr: attr,
+        },
+        '*'
+      );
+
+      // 2. Direct DOM mutation on contentDocument for instantaneous preview response
       const doc = iframeRef.current?.contentDocument;
       if (!doc) return;
 
-      const textEls = doc.querySelectorAll(`[data-bio-text="${fieldId}"]`);
+      // Universal WhatsApp update across all WhatsApp buttons/anchors in the biosite
+      if (targetKey === 'whatsapp' || semanticType === 'whatsapp') {
+        const waEls = doc.querySelectorAll(
+          'a[href*="wa.me"], a[href*="whatsapp"], a[href*="api.whatsapp.com"], [data-bio-link="whatsapp"]'
+        );
+        waEls.forEach((el) => {
+          (el as HTMLAnchorElement).href = value;
+        });
+        return;
+      }
+
+      // Universal Instagram update across all Instagram links
+      if (targetKey === 'instagram' || semanticType === 'instagram') {
+        const inEls = doc.querySelectorAll('a[href*="instagram.com"], [data-bio-link="instagram"]');
+        inEls.forEach((el) => {
+          (el as HTMLAnchorElement).href = value;
+        });
+        return;
+      }
+
+      // Universal Facebook update
+      if (targetKey === 'facebook' || semanticType === 'facebook') {
+        const fbEls = doc.querySelectorAll('a[href*="facebook.com"], a[href*="fb.com"], [data-bio-link="facebook"]');
+        fbEls.forEach((el) => {
+          (el as HTMLAnchorElement).href = value;
+        });
+        return;
+      }
+
+      // Universal TikTok update
+      if (targetKey === 'tiktok' || semanticType === 'tiktok') {
+        const ttEls = doc.querySelectorAll('a[href*="tiktok.com"], [data-bio-link="tiktok"]');
+        ttEls.forEach((el) => {
+          (el as HTMLAnchorElement).href = value;
+        });
+        return;
+      }
+
+      // Universal YouTube update
+      if (targetKey === 'youtube' || semanticType === 'youtube') {
+        const ytEls = doc.querySelectorAll('a[href*="youtube.com"], a[href*="youtu.be"], [data-bio-link="youtube"]');
+        ytEls.forEach((el) => {
+          (el as HTMLAnchorElement).href = value;
+        });
+        return;
+      }
+
+      // Universal Maps update
+      if (targetKey === 'maps' || targetKey === 'google_maps' || semanticType === 'maps') {
+        const mapEls = doc.querySelectorAll(
+          'a[href*="maps.google"], a[href*="goo.gl/maps"], a[href*="google.com/maps"], [data-bio-link="maps"], [data-bio-link="google_maps"]'
+        );
+        mapEls.forEach((el) => {
+          (el as HTMLAnchorElement).href = value;
+        });
+        return;
+      }
+
+      // Universal Logo update across all logo images
+      if (targetKey === 'logo' || targetKey === 'logo_principal' || semanticType === 'logo') {
+        const logoImgs = doc.querySelectorAll(
+          'img[data-bio-image="logo"], img[data-bio-image="logo_principal"], .logo img, [class*="logo"] img, img[alt*="logo" i]'
+        );
+        if (logoImgs.length > 0) {
+          logoImgs.forEach((el) => {
+            (el as HTMLImageElement).src = value;
+            if (el.hasAttribute('srcset')) el.removeAttribute('srcset');
+          });
+          return;
+        }
+      }
+
+      // Match by data-bio-eid
+      const eidEls = doc.querySelectorAll(`[data-bio-eid="${targetKey}"]`);
+      if (eidEls.length > 0) {
+        eidEls.forEach((el) => {
+          if (attr === 'src' || el.tagName.toLowerCase() === 'img') {
+            (el as HTMLImageElement).src = value;
+            if (el.hasAttribute('srcset')) el.removeAttribute('srcset');
+          } else if (attr === 'href' || el.tagName.toLowerCase() === 'a') {
+            (el as HTMLAnchorElement).href = value;
+          } else {
+            el.textContent = value;
+          }
+        });
+        return;
+      }
+
+      // Match by data-bio-text
+      const textEls = doc.querySelectorAll(`[data-bio-text="${targetKey}"]`);
       if (textEls.length > 0) {
         textEls.forEach((el) => {
           el.textContent = value;
@@ -250,15 +378,18 @@ export const BiositeEditor: React.FC<BiositeEditorProps> = ({
         return;
       }
 
-      const imgEls = doc.querySelectorAll(`[data-bio-image="${fieldId}"]`);
+      // Match by data-bio-image
+      const imgEls = doc.querySelectorAll(`[data-bio-image="${targetKey}"]`);
       if (imgEls.length > 0) {
         imgEls.forEach((el) => {
           (el as HTMLImageElement).src = value;
+          if (el.hasAttribute('srcset')) el.removeAttribute('srcset');
         });
         return;
       }
 
-      const linkEls = doc.querySelectorAll(`[data-bio-link="${fieldId}"]`);
+      // Match by data-bio-link
+      const linkEls = doc.querySelectorAll(`[data-bio-link="${targetKey}"]`);
       if (linkEls.length > 0) {
         linkEls.forEach((el) => {
           (el as HTMLAnchorElement).href = value;
@@ -266,14 +397,32 @@ export const BiositeEditor: React.FC<BiositeEditorProps> = ({
         return;
       }
 
-      const field = fields.find((f) => f.id === fieldId);
-      if (field?.selector) {
-        const el = doc.querySelector(field.selector);
-        if (el) {
-          if (field.attr === 'src') (el as HTMLImageElement).src = value;
-          else if (field.attr === 'href') (el as HTMLAnchorElement).href = value;
-          else el.textContent = value;
+      // Match by Element ID
+      const byId = doc.getElementById(targetKey);
+      if (byId) {
+        if (attr === 'src' || byId.tagName.toLowerCase() === 'img') {
+          (byId as HTMLImageElement).src = value;
+        } else if (attr === 'href' || byId.tagName.toLowerCase() === 'a') {
+          (byId as HTMLAnchorElement).href = value;
+        } else {
+          byId.textContent = value;
         }
+        return;
+      }
+
+      // Match by template field selector
+      const field = fields.find((f) => f.id === targetKey);
+      if (field?.selector) {
+        const matchEls = doc.querySelectorAll(field.selector);
+        matchEls.forEach((el) => {
+          if (field.attr === 'src' || el.tagName.toLowerCase() === 'img') {
+            (el as HTMLImageElement).src = value;
+          } else if (field.attr === 'href' || el.tagName.toLowerCase() === 'a') {
+            (el as HTMLAnchorElement).href = value;
+          } else {
+            el.textContent = value;
+          }
+        });
       }
     },
     [fields]
@@ -556,45 +705,183 @@ export const BiositeEditor: React.FC<BiositeEditorProps> = ({
     );
   };
 
+  // Deselect currently clicked element in preview
+  const handleDeselectElement = () => {
+    setSelectedElement(null);
+    setShowAppearanceInInspector(false);
+    iframeRef.current?.contentWindow?.postMessage({ type: 'BIO_FACIL_DESELECT' }, '*');
+  };
+
+  // Live text change from visual inspector
+  const handleInspectorTextChange = (text: string) => {
+    if (!selectedElement) return;
+    markModified();
+    setCustomValues((prev) => ({
+      ...prev,
+      [selectedElement.elementId]: text,
+    }));
+    updateIframeDom(selectedElement.elementId, text, 'text', selectedElement.semanticType);
+  };
+
+  // Live logo change from visual inspector
+  const handleInspectorLogoChange = (src: string) => {
+    markModified();
+    setCustomValues((prev) => ({
+      ...prev,
+      logo: src,
+      ...(selectedElement ? { [selectedElement.elementId]: src } : {}),
+    }));
+    updateIframeDom('logo', src, 'src', 'logo');
+    if (selectedElement && selectedElement.elementId !== 'logo') {
+      updateIframeDom(selectedElement.elementId, src, 'src', 'logo');
+    }
+  };
+
+  // Live image change from visual inspector
+  const handleInspectorImageChange = (src: string) => {
+    if (!selectedElement) return;
+    markModified();
+    const isLogo = selectedElement.semanticType === 'logo' || selectedElement.elementId === 'logo';
+    setCustomValues((prev) => ({
+      ...prev,
+      [selectedElement.elementId]: src,
+      ...(isLogo ? { logo: src } : {}),
+    }));
+    updateIframeDom(selectedElement.elementId, src, 'src', selectedElement.semanticType);
+  };
+
+  // Live WhatsApp change from visual inspector
+  const handleInspectorWhatsAppChange = (newPhone: string, newMsg: string) => {
+    markModified();
+    setWhatsAppPhone(newPhone);
+    setWhatsAppMessage(newMsg);
+    const genUrl = buildWhatsAppUrl(newPhone, newMsg);
+    setCustomValues((prev) => ({
+      ...prev,
+      whatsapp: genUrl,
+    }));
+    setSocialsConfig((prev) => ({
+      ...prev,
+      whatsapp: { ...prev.whatsapp, url: genUrl, enabled: true },
+    }));
+    updateIframeDom('whatsapp', genUrl, 'href', 'whatsapp');
+  };
+
+  // Live Button change from visual inspector
+  const handleInspectorButtonChange = (newText?: string, newHref?: string) => {
+    if (!selectedElement) return;
+    markModified();
+    if (newText !== undefined) {
+      setCustomValues((prev) => ({
+        ...prev,
+        [selectedElement.elementId]: newText,
+      }));
+      updateIframeDom(selectedElement.elementId, newText, 'text', 'button');
+    }
+    if (newHref !== undefined) {
+      setCustomValues((prev) => ({
+        ...prev,
+        [`${selectedElement.elementId}_href`]: newHref,
+      }));
+      updateIframeDom(selectedElement.elementId, newHref, 'href', 'button');
+    }
+  };
+
+  // Live Social URL change from visual inspector
+  const handleInspectorSocialChange = (key: string, rawVal: string) => {
+    markModified();
+    let finalUrl = rawVal;
+    if (key === 'instagram') {
+      finalUrl = normalizeInstagram(rawVal).url || rawVal;
+    } else if (key === 'facebook') {
+      finalUrl = normalizeFacebook(rawVal);
+    } else if (key === 'tiktok') {
+      finalUrl = normalizeTikTok(rawVal).url || rawVal;
+    } else if (key === 'youtube') {
+      finalUrl = normalizeYouTube(rawVal);
+    }
+    setCustomValues((prev) => ({
+      ...prev,
+      [key]: finalUrl,
+    }));
+    setSocialsConfig((prev) => ({
+      ...prev,
+      [key]: { ...(prev[key] || { enabled: true }), url: finalUrl, enabled: true },
+    }));
+    updateIframeDom(key, finalUrl, 'href', key);
+  };
+
+  // Live Google Maps change from visual inspector
+  const handleInspectorMapsChange = (url: string) => {
+    markModified();
+    setCustomValues((prev) => ({
+      ...prev,
+      maps: url,
+      [selectedElement?.elementId || 'maps']: url,
+    }));
+    updateIframeDom('maps', url, 'href', 'maps');
+  };
+
   // Listen for messages from the Preview iframe ("✦ EDITAR PELO PREVIEW")
   useEffect(() => {
     const handleMessage = (e: MessageEvent) => {
       if (!e.data || e.data.type !== 'BIO_FACIL_ELEMENT_CLICKED') return;
-      const { fieldId } = e.data;
-      if (!fieldId) return;
+      const data = e.data;
+      const elementId = data.elementId || data.fieldId || data.bioEid || '';
+      if (!elementId) return;
 
-      setActiveFieldId(fieldId);
+      const semanticType = (data.semanticType || (data.tagName === 'img' ? 'image' : 'text')) as SelectedInspectorElement['semanticType'];
 
-      // Open appropriate accordion
-      if (fieldId === 'logo' || fieldId === 'nome_empresa') {
-        setOpenAccordions((p) => ({ ...p, identidade: true }));
-      } else if (fieldId === 'headline' || fieldId === 'subtitulo') {
-        setOpenAccordions((p) => ({ ...p, textos: true }));
-      } else if (fieldId.startsWith('esp_')) {
-        setOpenAccordions((p) => ({ ...p, especialidades: true }));
-      } else if (fieldId.startsWith('galeria_')) {
-        setOpenAccordions((p) => ({ ...p, galeria: true }));
-      } else if (fieldId === 'whatsapp') {
-        setOpenAccordions((p) => ({ ...p, whatsapp: true }));
-      } else if (['instagram', 'facebook', 'tiktok', 'youtube'].includes(fieldId)) {
-        setOpenAccordions((p) => ({ ...p, redes: true }));
-      } else if (fieldId === 'endereco' || fieldId === 'maps') {
-        setOpenAccordions((p) => ({ ...p, localizacao: true }));
-      } else if (fieldId === 'google_review') {
-        setOpenAccordions((p) => ({ ...p, google_review: true }));
-      } else if (fieldId === 'horario') {
-        setOpenAccordions((p) => ({ ...p, horarios: true }));
-      }
+      const selected: SelectedInspectorElement = {
+        elementId: elementId,
+        fieldId: data.fieldId,
+        bioEid: data.bioEid,
+        semanticType: semanticType,
+        tagName: data.tagName || '',
+        attr: data.attr || '',
+        value: data.value || '',
+        text: data.text || '',
+        src: data.src || '',
+        href: data.href || '',
+        phone: data.phone || '',
+        message: data.message || '',
+      };
 
-      setMobileTab('editor');
+      setSelectedElement(selected);
 
-      setTimeout(() => {
-        const el = document.getElementById(`field-input-${fieldId}`);
-        if (el) {
-          el.scrollIntoView({ behavior: 'smooth', block: 'center' });
-          el.focus();
+      // If WhatsApp clicked and phone was in URL, update inputs
+      if (semanticType === 'whatsapp') {
+        if (data.phone) {
+          setWhatsAppPhone(formatPhoneDisplay(data.phone));
         }
-      }, 150);
+        if (data.message) {
+          setWhatsAppMessage(data.message);
+        }
+        setOpenAccordions((p) => ({ ...p, whatsapp: true }));
+      } else if (semanticType === 'logo') {
+        setOpenAccordions((p) => ({ ...p, identidade: true }));
+      } else if (['instagram', 'facebook', 'tiktok', 'youtube'].includes(semanticType)) {
+        setOpenAccordions((p) => ({ ...p, redes: true }));
+      } else if (semanticType === 'maps') {
+        setOpenAccordions((p) => ({ ...p, localizacao: true }));
+      } else if (data.fieldId) {
+        setActiveFieldId(data.fieldId);
+        if (data.fieldId === 'nome_empresa') {
+          setOpenAccordions((p) => ({ ...p, identidade: true }));
+        } else if (data.fieldId === 'headline' || data.fieldId === 'subtitulo') {
+          setOpenAccordions((p) => ({ ...p, textos: true }));
+        } else if (data.fieldId.startsWith('esp_')) {
+          setOpenAccordions((p) => ({ ...p, especialidades: true }));
+        } else if (data.fieldId.startsWith('galeria_')) {
+          setOpenAccordions((p) => ({ ...p, galeria: true }));
+        } else if (data.fieldId === 'endereco') {
+          setOpenAccordions((p) => ({ ...p, localizacao: true }));
+        } else if (data.fieldId === 'google_review') {
+          setOpenAccordions((p) => ({ ...p, google_review: true }));
+        } else if (data.fieldId === 'horario') {
+          setOpenAccordions((p) => ({ ...p, horarios: true }));
+        }
+      }
     };
 
     window.addEventListener('message', handleMessage);
@@ -756,6 +1043,448 @@ export const BiositeEditor: React.FC<BiositeEditorProps> = ({
     await navigator.clipboard.writeText(cleanCompiled);
     setCopiedHtml(true);
     setTimeout(() => setCopiedHtml(false), 2000);
+  };
+
+  /**
+   * Render contextual inspector content for the clicked element in the preview
+   */
+  const renderInspectorContent = () => {
+    if (!selectedElement) return null;
+
+    const isWhatsApp = selectedElement.semanticType === 'whatsapp';
+    const isLogo = selectedElement.semanticType === 'logo' || selectedElement.elementId === 'logo';
+    const isImage = selectedElement.semanticType === 'image' && !isLogo;
+    const isText = selectedElement.semanticType === 'text' || selectedElement.semanticType === 'title';
+    const isInstagram = selectedElement.semanticType === 'instagram';
+    const isButton = selectedElement.semanticType === 'button';
+    const isMaps = selectedElement.semanticType === 'maps';
+    const isOtherSocial = ['facebook', 'tiktok', 'youtube'].includes(selectedElement.semanticType);
+
+    return (
+      <div className="space-y-3.5">
+        {/* Header */}
+        <div className="flex items-center justify-between pb-2 border-b border-purple-500/20">
+          <div className="flex items-center gap-2">
+            <div className="w-7 h-7 rounded-lg bg-purple-900/50 border border-purple-500/30 flex items-center justify-center">
+              {isWhatsApp && <MessageCircle size={15} className="text-emerald-400" />}
+              {isLogo && <ImageIcon size={15} className="text-purple-400" />}
+              {isImage && <ImageIcon size={15} className="text-blue-400" />}
+              {isText && <Type size={15} className="text-amber-400" />}
+              {isInstagram && <InstagramIcon className="w-3.5 h-3.5 text-pink-400" />}
+              {isButton && <LinkIcon size={15} className="text-blue-400" />}
+              {isMaps && <MapPin size={15} className="text-rose-400" />}
+              {isOtherSocial && <Share2 size={15} className="text-indigo-400" />}
+            </div>
+            <div>
+              <div className="flex items-center gap-1.5">
+                <h4 className="text-xs font-bold text-white uppercase tracking-wider">
+                  {isWhatsApp && 'Editar WhatsApp'}
+                  {isLogo && 'Editar Logomarca'}
+                  {isImage && 'Editar Imagem'}
+                  {isText && (selectedElement.semanticType === 'title' ? 'Editar Título' : 'Editar Texto')}
+                  {isInstagram && 'Editar Instagram'}
+                  {isButton && 'Editar Botão / Link'}
+                  {isMaps && 'Editar Localização'}
+                  {isOtherSocial && `Editar ${selectedElement.semanticType.toUpperCase()}`}
+                </h4>
+                <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-purple-500/20 text-purple-300 border border-purple-500/30">
+                  ✦ PREVIEW
+                </span>
+              </div>
+              <p className="text-[10px] text-gray-400">Alterações são aplicadas imediatamente</p>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={handleDeselectElement}
+            className="text-gray-400 hover:text-white p-1 rounded-lg hover:bg-white/10 transition-colors"
+            title="Fechar / Desmarcar"
+          >
+            <X size={16} />
+          </button>
+        </div>
+
+        {/* 1. WHATSAPP */}
+        {isWhatsApp && (
+          <div className="space-y-3">
+            <div className="space-y-1">
+              <label className="text-[11px] font-bold text-gray-300 block">Número do WhatsApp (com DDD):</label>
+              <input
+                type="tel"
+                value={whatsAppPhone}
+                onChange={(e) => handleInspectorWhatsAppChange(e.target.value, whatsAppMessage)}
+                placeholder="(34) 99999-9999"
+                className="w-full bg-[#090814] border border-purple-500/30 rounded-xl px-3 py-2 text-xs text-white placeholder-gray-500 focus:outline-none focus:border-purple-400"
+              />
+            </div>
+
+            <div className="space-y-1">
+              <label className="text-[11px] font-bold text-gray-300 block">Mensagem Inicial Pré-definida:</label>
+              <textarea
+                rows={2}
+                value={whatsAppMessage}
+                onChange={(e) => handleInspectorWhatsAppChange(whatsAppPhone, e.target.value)}
+                placeholder="Olá! Vim pelo site..."
+                className="w-full bg-[#090814] border border-purple-500/30 rounded-xl p-2 text-xs text-white placeholder-gray-500 focus:outline-none focus:border-purple-400 resize-none"
+              />
+            </div>
+
+            <div className="flex items-center justify-between pt-1">
+              <a
+                href={buildWhatsAppUrl(whatsAppPhone, whatsAppMessage) || '#'}
+                target="_blank"
+                rel="noreferrer"
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs shadow-md transition-all active:scale-95"
+              >
+                <MessageCircle size={13} />
+                <span>TESTAR WHATSAPP</span>
+                <ExternalLink size={11} />
+              </a>
+              <span className="text-[10px] text-emerald-400 font-medium">✓ Todos os botões atualizados</span>
+            </div>
+          </div>
+        )}
+
+        {/* 2. LOGO */}
+        {isLogo && (
+          <div className="space-y-3">
+            <div className="flex items-center gap-3 bg-[#090814] p-2.5 rounded-xl border border-purple-500/20">
+              <img
+                src={customValues['logo'] || selectedElement.src || ''}
+                alt="Logo Atual"
+                className="w-16 h-16 object-contain rounded-lg bg-black/50 p-1 border border-white/10"
+              />
+              <div className="flex-1 space-y-1.5">
+                <label className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-purple-600 hover:bg-purple-500 text-white font-bold text-xs cursor-pointer shadow-md transition-all active:scale-95">
+                  <Upload size={13} />
+                  <span>FAZER UPLOAD</span>
+                  <input
+                    type="file"
+                    accept="image/*"
+                    onChange={(e) => {
+                      const file = e.target.files?.[0];
+                      if (file) {
+                        const reader = new FileReader();
+                        reader.onload = () => {
+                          if (typeof reader.result === 'string') {
+                            handleInspectorLogoChange(reader.result);
+                          }
+                        };
+                        reader.readAsDataURL(file);
+                      }
+                      e.target.value = '';
+                    }}
+                    className="hidden"
+                  />
+                </label>
+                {selectedElement.src && (
+                  <button
+                    type="button"
+                    onClick={() => handleInspectorLogoChange(selectedElement.src || '')}
+                    className="text-[10px] text-gray-400 hover:text-white flex items-center gap-1"
+                  >
+                    <RotateCcw size={10} /> Restaurar Original
+                  </button>
+                )}
+              </div>
+            </div>
+
+            <div className="space-y-1">
+              <label className="text-[11px] font-bold text-gray-300 block">Ou Cole o Link Direto da Imagem:</label>
+              <input
+                type="url"
+                value={customValues['logo'] || ''}
+                onChange={(e) => handleInspectorLogoChange(e.target.value)}
+                placeholder="https://.../logo.png"
+                className="w-full bg-[#090814] border border-purple-500/30 rounded-xl px-3 py-2 text-xs text-white placeholder-gray-500 focus:outline-none focus:border-purple-400"
+              />
+            </div>
+
+            <button
+              type="button"
+              onClick={() => {
+                const currentLogo = customValues['logo'] || selectedElement.src;
+                if (currentLogo) {
+                  setOriginalLogoSrc(currentLogo);
+                  setIsProcessingRemoval(true);
+                  setLogoModalOpen(true);
+                  setSelectedBgChoice('original');
+                  processImageBackground(currentLogo).then((res) => {
+                    setRemovedBgLogoSrc(res.dataUrl);
+                    setHasDetectedTransparency(res.hasTransparency);
+                    if (res.hasTransparency) setSelectedBgChoice('original');
+                    setIsProcessingRemoval(false);
+                  });
+                }
+              }}
+              className="w-full py-2 px-3 rounded-xl bg-purple-500/15 hover:bg-purple-500/25 border border-purple-500/30 text-purple-300 font-bold text-xs flex items-center justify-center gap-1.5 transition-all"
+            >
+              <Sparkles size={13} />
+              <span>Remover Fundo Automático</span>
+            </button>
+          </div>
+        )}
+
+        {/* 3. IMAGEM / FOTO */}
+        {isImage && (
+          <div className="space-y-3">
+            <div className="flex items-center gap-3 bg-[#090814] p-2.5 rounded-xl border border-purple-500/20">
+              <img
+                src={customValues[selectedElement.elementId] || selectedElement.src || ''}
+                alt="Imagem"
+                className="w-16 h-16 object-cover rounded-lg bg-black/50 p-0.5 border border-white/10"
+              />
+              <div className="flex-1 space-y-1.5">
+                <label className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-purple-600 hover:bg-purple-500 text-white font-bold text-xs cursor-pointer shadow-md transition-all active:scale-95">
+                  <Upload size={13} />
+                  <span>FAZER UPLOAD</span>
+                  <input
+                    type="file"
+                    accept="image/*"
+                    onChange={(e) => {
+                      const file = e.target.files?.[0];
+                      if (file) {
+                        const reader = new FileReader();
+                        reader.onload = () => {
+                          if (typeof reader.result === 'string') {
+                            handleInspectorImageChange(reader.result);
+                          }
+                        };
+                        reader.readAsDataURL(file);
+                      }
+                      e.target.value = '';
+                    }}
+                    className="hidden"
+                  />
+                </label>
+                {selectedElement.src && (
+                  <button
+                    type="button"
+                    onClick={() => handleInspectorImageChange(selectedElement.src || '')}
+                    className="text-[10px] text-gray-400 hover:text-white flex items-center gap-1"
+                  >
+                    <RotateCcw size={10} /> Restaurar Original
+                  </button>
+                )}
+              </div>
+            </div>
+
+            <div className="space-y-1">
+              <label className="text-[11px] font-bold text-gray-300 block">Ou Cole o Link da Imagem:</label>
+              <input
+                type="url"
+                value={customValues[selectedElement.elementId] || ''}
+                onChange={(e) => handleInspectorImageChange(e.target.value)}
+                placeholder="https://.../imagem.jpg"
+                className="w-full bg-[#090814] border border-purple-500/30 rounded-xl px-3 py-2 text-xs text-white placeholder-gray-500 focus:outline-none focus:border-purple-400"
+              />
+            </div>
+          </div>
+        )}
+
+        {/* 4. TEXTO / TÍTULO */}
+        {isText && (
+          <div className="space-y-2.5">
+            <div className="space-y-1">
+              <label className="text-[11px] font-bold text-gray-300 block">Conteúdo do Texto:</label>
+              <textarea
+                rows={3}
+                value={customValues[selectedElement.elementId] ?? selectedElement.text}
+                onChange={(e) => handleInspectorTextChange(e.target.value)}
+                placeholder="Digite o texto aqui..."
+                className="w-full bg-[#090814] border border-purple-500/30 rounded-xl p-2.5 text-xs text-white placeholder-gray-500 focus:outline-none focus:border-purple-400"
+              />
+            </div>
+
+            {selectedElement.text && (
+              <button
+                type="button"
+                onClick={() => handleInspectorTextChange(selectedElement.text)}
+                className="text-[10px] text-gray-400 hover:text-white flex items-center gap-1"
+              >
+                <RotateCcw size={10} /> Restaurar Texto Original
+              </button>
+            )}
+          </div>
+        )}
+
+        {/* 5. INSTAGRAM */}
+        {isInstagram && (
+          <div className="space-y-3">
+            <div className="space-y-1">
+              <label className="text-[11px] font-bold text-gray-300 block">Perfil ou Link do Instagram:</label>
+              <input
+                type="text"
+                value={socialsConfig.instagram.url || selectedElement.href || ''}
+                onChange={(e) => handleInspectorSocialChange('instagram', e.target.value)}
+                placeholder="@meuperfil ou https://instagram.com/meuperfil"
+                className="w-full bg-[#090814] border border-purple-500/30 rounded-xl px-3 py-2 text-xs text-white placeholder-gray-500 focus:outline-none focus:border-purple-400"
+              />
+            </div>
+
+            {socialsConfig.instagram.url && (
+              <a
+                href={socialsConfig.instagram.url}
+                target="_blank"
+                rel="noreferrer"
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-pink-600 hover:bg-pink-500 text-white font-bold text-xs shadow-md transition-all active:scale-95"
+              >
+                <InstagramIcon className="w-3.5 h-3.5" />
+                <span>TESTAR INSTAGRAM</span>
+                <ExternalLink size={11} />
+              </a>
+            )}
+          </div>
+        )}
+
+        {/* 6. BOTÃO / LINK GERAL */}
+        {isButton && (
+          <div className="space-y-3">
+            <div className="space-y-1">
+              <label className="text-[11px] font-bold text-gray-300 block">Texto do Botão:</label>
+              <input
+                type="text"
+                value={customValues[selectedElement.elementId] ?? selectedElement.text}
+                onChange={(e) => handleInspectorButtonChange(e.target.value, undefined)}
+                placeholder="Texto do botão..."
+                className="w-full bg-[#090814] border border-purple-500/30 rounded-xl px-3 py-2 text-xs text-white placeholder-gray-500 focus:outline-none focus:border-purple-400"
+              />
+            </div>
+
+            <div className="space-y-1">
+              <label className="text-[11px] font-bold text-gray-300 block">Link de Destino (URL):</label>
+              <input
+                type="text"
+                value={customValues[`${selectedElement.elementId}_href`] ?? selectedElement.href}
+                onChange={(e) => handleInspectorButtonChange(undefined, e.target.value)}
+                placeholder="https://... ou wa.me/..."
+                className="w-full bg-[#090814] border border-purple-500/30 rounded-xl px-3 py-2 text-xs text-white placeholder-gray-500 focus:outline-none focus:border-purple-400"
+              />
+            </div>
+
+            <button
+              type="button"
+              onClick={() => {
+                const waUrl = buildWhatsAppUrl(whatsAppPhone, whatsAppMessage);
+                if (waUrl) {
+                  handleInspectorButtonChange(undefined, waUrl);
+                }
+              }}
+              className="w-full py-1.5 px-3 rounded-xl bg-emerald-600/20 hover:bg-emerald-600/30 border border-emerald-500/30 text-emerald-300 font-bold text-xs flex items-center justify-center gap-1.5 transition-all"
+            >
+              <MessageCircle size={13} />
+              <span>Apontar este botão para o WhatsApp</span>
+            </button>
+          </div>
+        )}
+
+        {/* 7. LOCALIZAÇÃO / GOOGLE MAPS */}
+        {isMaps && (
+          <div className="space-y-3">
+            <div className="space-y-1">
+              <label className="text-[11px] font-bold text-gray-300 block">Link do Google Maps:</label>
+              <input
+                type="text"
+                value={customValues['maps'] || selectedElement.href || ''}
+                onChange={(e) => handleInspectorMapsChange(e.target.value)}
+                placeholder="https://maps.google.com/..."
+                className="w-full bg-[#090814] border border-purple-500/30 rounded-xl px-3 py-2 text-xs text-white placeholder-gray-500 focus:outline-none focus:border-purple-400"
+              />
+            </div>
+
+            {customValues['maps'] && (
+              <a
+                href={customValues['maps']}
+                target="_blank"
+                rel="noreferrer"
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-rose-600 hover:bg-rose-500 text-white font-bold text-xs shadow-md transition-all active:scale-95"
+              >
+                <MapPin size={13} />
+                <span>TESTAR MAPS</span>
+                <ExternalLink size={11} />
+              </a>
+            )}
+          </div>
+        )}
+
+        {/* 8. OUTRAS REDES SOCIAIS */}
+        {isOtherSocial && (
+          <div className="space-y-3">
+            <div className="space-y-1">
+              <label className="text-[11px] font-bold text-gray-300 block">
+                Link de {selectedElement.semanticType.toUpperCase()}:
+              </label>
+              <input
+                type="text"
+                value={customValues[selectedElement.semanticType] || selectedElement.href || ''}
+                onChange={(e) => handleInspectorSocialChange(selectedElement.semanticType, e.target.value)}
+                placeholder={`https://${selectedElement.semanticType}.com/...`}
+                className="w-full bg-[#090814] border border-purple-500/30 rounded-xl px-3 py-2 text-xs text-white placeholder-gray-500 focus:outline-none focus:border-purple-400"
+              />
+            </div>
+          </div>
+        )}
+
+        {/* 9. CORES & PALETAS PRONTAS (DROPDOWN / ACCORDION) */}
+        <div className="pt-2 border-t border-purple-500/20">
+          <button
+            type="button"
+            onClick={() => setShowAppearanceInInspector((p) => !p)}
+            className="w-full flex items-center justify-between px-3 py-2 rounded-xl bg-[#121022] hover:bg-[#18162e] border border-purple-500/20 text-xs text-purple-200 font-semibold transition-all"
+          >
+            <span className="flex items-center gap-1.5">
+              <Palette size={13} className="text-purple-400" />
+              <span>✦ Cores & Paletas do Modelo</span>
+            </span>
+            <ChevronDown size={14} className={`transition-transform duration-200 ${showAppearanceInInspector ? 'rotate-180' : ''}`} />
+          </button>
+
+          {showAppearanceInInspector && (
+            <div className="mt-2 p-2.5 rounded-xl bg-[#090814] border border-purple-500/20 space-y-2.5 animate-in fade-in">
+              <label className="text-[10px] font-bold text-gray-400 uppercase tracking-wider block">
+                Paletas Prontas:
+              </label>
+              <div className="grid grid-cols-2 gap-1.5">
+                {READY_PALETTES.map((pal) => (
+                  <button
+                    key={pal.id}
+                    type="button"
+                    onClick={() => handleSelectPalette(pal.id)}
+                    className={`px-2 py-1.5 rounded-lg text-left text-[11px] font-medium transition-all border ${
+                      selectedPalette === pal.id
+                        ? 'border-purple-400 bg-purple-900/40 text-white'
+                        : 'border-white/5 bg-[#141224] text-gray-300 hover:border-purple-500/30'
+                    }`}
+                  >
+                    <div className="flex items-center gap-1.5">
+                      <div className="flex -space-x-1 shrink-0">
+                        <div className="w-2.5 h-2.5 rounded-full border border-black/50" style={{ backgroundColor: pal.colors.primary }} />
+                        <div className="w-2.5 h-2.5 rounded-full border border-black/50" style={{ backgroundColor: pal.colors.bg }} />
+                      </div>
+                      <span className="truncate">{pal.name}</span>
+                    </div>
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* Footer info */}
+        <div className="text-[10px] text-gray-500 flex items-center justify-between pt-1 border-t border-white/5">
+          <span className="flex items-center gap-1 text-emerald-400 font-medium">
+            ● Atualização em tempo real
+          </span>
+          <button
+            type="button"
+            onClick={handleDeselectElement}
+            className="text-gray-400 hover:text-white underline text-[10px]"
+          >
+            Concluir Edição
+          </button>
+        </div>
+      </div>
+    );
   };
 
   return (
@@ -2137,10 +2866,38 @@ export const BiositeEditor: React.FC<BiositeEditorProps> = ({
             RIGHT COLUMN: REAL LIVE PREVIEW (NO RELOAD ON KEYSTROKE)
            ════════════════════════════════════════════════════════ */}
         <main
-          className={`flex-1 bg-[#040407] flex flex-col items-center justify-center p-2 sm:p-4 overflow-hidden ${
+          className={`flex-1 bg-[#040407] flex flex-col items-center justify-center p-2 sm:p-4 overflow-hidden relative ${
             mobileTab === 'preview' ? 'flex' : 'hidden md:flex'
           }`}
         >
+          {/* Top Interactive Inspector Bar */}
+          <div className="w-full max-w-[420px] mb-2 flex items-center justify-between px-1 shrink-0 z-10">
+            <button
+              type="button"
+              onClick={() => {
+                const next = !inspectorActive;
+                setInspectorActive(next);
+                if (!next) {
+                  handleDeselectElement();
+                }
+              }}
+              className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-bold transition-all active:scale-95 ${
+                inspectorActive
+                  ? 'bg-purple-600 hover:bg-purple-500 text-white shadow-[0_0_20px_rgba(168,85,247,0.5)] ring-2 ring-purple-400/40'
+                  : 'bg-[#121020] text-gray-400 hover:text-white border border-purple-500/20'
+              }`}
+            >
+              <MousePointerClick size={14} className={inspectorActive ? 'animate-pulse text-purple-200' : ''} />
+              <span>✦ Editar pelo Preview: {inspectorActive ? 'ATIVADO' : 'DESATIVADO'}</span>
+            </button>
+
+            {inspectorActive && (
+              <span className="text-[11px] text-purple-300 font-medium hidden sm:inline animate-pulse">
+                Toque em um item para editar
+              </span>
+            )}
+          </div>
+
           {/* Device Mockup Shell */}
           <div
             className={`transition-all duration-300 flex flex-col overflow-hidden ${
@@ -2165,6 +2922,25 @@ export const BiositeEditor: React.FC<BiositeEditorProps> = ({
               sandbox="allow-scripts allow-same-origin allow-popups"
             />
           </div>
+
+          {/* ─────────────────────────────────────────────────────────
+              VISUAL INSPECTOR: DESKTOP FLOATING CARD
+             ───────────────────────────────────────────────────────── */}
+          {inspectorActive && selectedElement && (
+            <div className="hidden md:flex absolute top-4 right-4 z-40 w-84 md:w-96 max-h-[85vh] bg-[#0c0a1a]/95 backdrop-blur-xl border border-purple-500/40 rounded-3xl shadow-[0_20px_50px_rgba(0,0,0,0.85)] p-4 flex-col overflow-y-auto animate-in fade-in zoom-in-95">
+              {renderInspectorContent()}
+            </div>
+          )}
+
+          {/* ─────────────────────────────────────────────────────────
+              VISUAL INSPECTOR: MOBILE BOTTOM SHEET
+             ───────────────────────────────────────────────────────── */}
+          {inspectorActive && selectedElement && (
+            <div className="md:hidden fixed inset-x-0 bottom-0 z-50 max-h-[58vh] bg-[#0e0c1f]/98 backdrop-blur-2xl border-t-2 border-purple-500/40 rounded-t-3xl shadow-[0_-15px_40px_rgba(0,0,0,0.9)] p-4 pb-8 flex flex-col overflow-y-auto animate-in slide-in-from-bottom-5">
+              <div className="w-12 h-1 bg-white/20 rounded-full mx-auto shrink-0 mb-2" />
+              {renderInspectorContent()}
+            </div>
+          )}
         </main>
       </div>
 

@@ -960,7 +960,9 @@ export function stampDataBioAttributes(
 }
 
 /**
- * Compiles a customized biosite by injecting client-customized values, theme styles, icon styles, and socials
+ * Compiles a customized biosite by injecting client-customized values, theme styles, icon styles, and socials.
+ * Single source of truth: ensures all changes (WhatsApp on all buttons, Logo on all logo elements,
+ * texts, images, social networks, and theme overrides) are thoroughly and reliably persisted.
  */
 export function compileBiositeHtml(
   templateHtml: string,
@@ -978,30 +980,158 @@ export function compileBiositeHtml(
   const parser = new DOMParser();
   const doc = parser.parseFromString(templateHtml, 'text/html');
 
-  // 1. Inject custom values for fields
-  fields.forEach(field => {
-    const val = customValues[field.id];
-    if (val === undefined || val === null || val === '') return;
+  // 1. Comprehensive WhatsApp update across ALL matching links in the entire document
+  const whatsappUrl = customValues['whatsapp'] || options?.socialsConfig?.['whatsapp']?.url;
+  if (whatsappUrl) {
+    const waLinks = doc.querySelectorAll(
+      'a[href*="wa.me"], a[href*="whatsapp"], a[href*="api.whatsapp.com"], [data-bio-link="whatsapp"]'
+    );
+    waLinks.forEach((link) => {
+      link.setAttribute('href', whatsappUrl);
+    });
+  }
 
-    if (field.attr === 'src') {
-      const element = doc.querySelector(`[data-bio-image="${field.id}"]`) || (field.selector ? doc.querySelector(field.selector) : null);
-      if (element) {
-        element.setAttribute('src', val);
+  // 2. Comprehensive Logo update across ALL matching logo images in the document
+  const logoSrc = customValues['logo'] || customValues['logo_principal'];
+  if (logoSrc) {
+    const logoImgs = doc.querySelectorAll(
+      'img[data-bio-image="logo"], img[data-bio-image="logo_principal"], .logo img, [class*="logo"] img, img[alt*="logo" i]'
+    );
+    logoImgs.forEach((img) => {
+      img.setAttribute('src', logoSrc);
+      if (img.hasAttribute('srcset')) img.removeAttribute('srcset');
+    });
+  }
+
+  // 3. Comprehensive Instagram update across all matching links
+  const instaUrl = customValues['instagram'] || options?.socialsConfig?.['instagram']?.url;
+  if (instaUrl) {
+    const instaLinks = doc.querySelectorAll('a[href*="instagram.com"], [data-bio-link="instagram"]');
+    instaLinks.forEach((link) => {
+      link.setAttribute('href', instaUrl);
+    });
+  }
+
+  // 4. Comprehensive Facebook update
+  const fbUrl = customValues['facebook'] || options?.socialsConfig?.['facebook']?.url;
+  if (fbUrl) {
+    const fbLinks = doc.querySelectorAll('a[href*="facebook.com"], a[href*="fb.com"], [data-bio-link="facebook"]');
+    fbLinks.forEach((link) => {
+      link.setAttribute('href', fbUrl);
+    });
+  }
+
+  // 5. Comprehensive TikTok update
+  const tiktokUrl = customValues['tiktok'] || options?.socialsConfig?.['tiktok']?.url;
+  if (tiktokUrl) {
+    const tiktokLinks = doc.querySelectorAll('a[href*="tiktok.com"], [data-bio-link="tiktok"]');
+    tiktokLinks.forEach((link) => {
+      link.setAttribute('href', tiktokUrl);
+    });
+  }
+
+  // 6. Comprehensive YouTube update
+  const ytUrl = customValues['youtube'] || options?.socialsConfig?.['youtube']?.url;
+  if (ytUrl) {
+    const ytLinks = doc.querySelectorAll('a[href*="youtube.com"], a[href*="youtu.be"], [data-bio-link="youtube"]');
+    ytLinks.forEach((link) => {
+      link.setAttribute('href', ytUrl);
+    });
+  }
+
+  // 7. Comprehensive Google Maps update
+  const mapsUrl = customValues['maps'] || customValues['google_maps'];
+  if (mapsUrl) {
+    const mapsLinks = doc.querySelectorAll(
+      'a[href*="maps.google"], a[href*="goo.gl/maps"], a[href*="google.com/maps"], [data-bio-link="maps"], [data-bio-link="google_maps"]'
+    );
+    mapsLinks.forEach((link) => {
+      link.setAttribute('href', mapsUrl);
+    });
+  }
+
+  // 8. Update specific custom values by ID, data-bio-eid, data-bio-*, selector or id
+  Object.entries(customValues).forEach(([key, val]) => {
+    if (val === undefined || val === null || val === '') return;
+    // Skip general network keys already comprehensively processed
+    if (['whatsapp', 'logo', 'instagram', 'facebook', 'tiktok', 'youtube', 'maps'].includes(key)) return;
+
+    // Search by data-bio-eid
+    const eidEls = doc.querySelectorAll(`[data-bio-eid="${key}"]`);
+    if (eidEls.length > 0) {
+      eidEls.forEach((el) => {
+        if (el.tagName === 'IMG') {
+          el.setAttribute('src', val);
+          if (el.hasAttribute('srcset')) el.removeAttribute('srcset');
+        } else if (el.tagName === 'A') {
+          el.setAttribute('href', val);
+        } else {
+          el.textContent = val;
+        }
+      });
+      return;
+    }
+
+    // Search by data-bio-text
+    const textEls = doc.querySelectorAll(`[data-bio-text="${key}"]`);
+    if (textEls.length > 0) {
+      textEls.forEach((el) => {
+        el.textContent = val;
+      });
+      return;
+    }
+
+    // Search by data-bio-image
+    const imgEls = doc.querySelectorAll(`[data-bio-image="${key}"]`);
+    if (imgEls.length > 0) {
+      imgEls.forEach((el) => {
+        el.setAttribute('src', val);
+        if (el.hasAttribute('srcset')) el.removeAttribute('srcset');
+      });
+      return;
+    }
+
+    // Search by data-bio-link
+    const linkEls = doc.querySelectorAll(`[data-bio-link="${key}"]`);
+    if (linkEls.length > 0) {
+      linkEls.forEach((el) => {
+        el.setAttribute('href', val);
+      });
+      return;
+    }
+
+    // Search by element id
+    const byId = doc.getElementById(key);
+    if (byId) {
+      if (byId.tagName === 'IMG') {
+        byId.setAttribute('src', val);
+        if (byId.hasAttribute('srcset')) byId.removeAttribute('srcset');
+      } else if (byId.tagName === 'A') {
+        byId.setAttribute('href', val);
+      } else {
+        byId.textContent = val;
       }
-    } else if (field.attr === 'href') {
-      const element = doc.querySelector(`[data-bio-link="${field.id}"]`) || (field.selector ? doc.querySelector(field.selector) : null);
-      if (element) {
-        element.setAttribute('href', val);
-      }
-    } else {
-      const element = doc.querySelector(`[data-bio-text="${field.id}"]`) || (field.selector ? doc.querySelector(field.selector) : null);
-      if (element) {
-        element.textContent = val;
-      }
+      return;
+    }
+
+    // Search by field definition selector
+    const field = fields.find((f) => f.id === key);
+    if (field?.selector) {
+      const matchEls = doc.querySelectorAll(field.selector);
+      matchEls.forEach((el) => {
+        if (field.attr === 'src' || el.tagName === 'IMG') {
+          el.setAttribute('src', val);
+          if (el.hasAttribute('srcset')) el.removeAttribute('srcset');
+        } else if (field.attr === 'href' || el.tagName === 'A') {
+          el.setAttribute('href', val);
+        } else {
+          el.textContent = val;
+        }
+      });
     }
   });
 
-  // 2. Configure Social Networks (visibility, URLs, and dynamically adding Facebook/TikTok/YouTube)
+  // 9. Configure Social Networks (visibility, URLs, and dynamically adding Facebook/TikTok/YouTube)
   if (options?.socialsConfig) {
     const socialBar = doc.querySelector('.social-bar') || doc.querySelector('[data-bio-social-bar]');
 
@@ -1009,18 +1139,15 @@ export function compileBiositeHtml(
       let socialLink = doc.querySelector(`[data-bio-link="${key}"]`);
 
       if (!config.enabled) {
-        // If disabled, hide it
         if (socialLink) {
           socialLink.remove();
         }
       } else {
-        // If enabled and link exists, update URL
         if (socialLink) {
           if (config.url) {
             socialLink.setAttribute('href', config.url);
           }
         } else if (socialBar && config.url && SOCIAL_SVGS[key]) {
-          // If enabled, not in DOM, and dynamic social bar exists, append it safely
           const newA = doc.createElement('a');
           newA.setAttribute('href', config.url);
           newA.setAttribute('target', '_blank');
@@ -1034,7 +1161,7 @@ export function compileBiositeHtml(
     });
   }
 
-  // 3. Inject Theme CSS (Colors, Palettes, Icon Styles, Logo Dimensions)
+  // 10. Inject Theme CSS (Colors, Palettes, Icon Styles, Logo Dimensions)
   const isOriginal = options?.selectedPalette === 'original';
   const detectedTheme = extractThemeInfoFromHtml(templateHtml);
   const extraProps = options?.detectedProps || detectedTheme.cssVariables;
@@ -1068,6 +1195,27 @@ export function compileBiositeHtml(
     doc.body.style.setProperty('background-color', options.customColors['bg'], 'important');
     doc.body.style.setProperty('color', options.customColors['text'] || '#ffffff', 'important');
   }
+
+  // 11. Clean up any temporary visual inspector artifacts from exported HTML
+  const inspectorScript = doc.getElementById('biofacil-inspector-script');
+  if (inspectorScript) inspectorScript.remove();
+
+  const allElements = doc.querySelectorAll('*');
+  allElements.forEach((el) => {
+    // Remove editor-only outline/box-shadow style if present
+    const inlineStyle = el.getAttribute('style') || '';
+    if (inlineStyle.includes('outline') || inlineStyle.includes('box-shadow')) {
+      const cleaned = inlineStyle
+        .replace(/outline:[^;]+;?/gi, '')
+        .replace(/box-shadow:[^;]+;?/gi, '')
+        .trim();
+      if (cleaned) {
+        el.setAttribute('style', cleaned);
+      } else {
+        el.removeAttribute('style');
+      }
+    }
+  });
 
   return '<!DOCTYPE html>\n' + doc.documentElement.outerHTML;
 }
@@ -1248,49 +1396,178 @@ export function injectVisualInspectorScript(
   enableInspector: boolean
 ): string {
   const inspectorScript = `
-  <script>
+  <script id="biofacil-inspector-script">
     (function() {
-      // Bio Fácil Visual Inspector Bridge
+      // Bio Fácil Visual Inspector & Two-Way Interactive DOM Bridge
       var isInspectorActive = ${enableInspector ? 'true' : 'false'};
+      var currentSelectedEl = null;
+      var currentHoverEl = null;
+
+      // Assign stable IDs on load to content elements that lack data-bio-*
+      function stampStableIds() {
+        var elements = document.querySelectorAll('img, a, button, h1, h2, h3, h4, h5, h6, p, span, li');
+        var counter = 0;
+        elements.forEach(function(el) {
+          if (!el.getAttribute('data-bio-text') && 
+              !el.getAttribute('data-bio-image') && 
+              !el.getAttribute('data-bio-link') && 
+              !el.getAttribute('data-bio-eid')) {
+            counter++;
+            el.setAttribute('data-bio-eid', 'bio_el_' + counter);
+          }
+        });
+      }
+
+      if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', stampStableIds);
+      } else {
+        stampStableIds();
+      }
+
+      // Helper to determine semantic type
+      function detectSemantic(el) {
+        var anchor = el.closest('a');
+        if (anchor) {
+          var href = (anchor.getAttribute('href') || '').toLowerCase();
+          if (href.includes('wa.me') || href.includes('whatsapp') || href.includes('api.whatsapp.com')) return { type: 'whatsapp', node: anchor };
+          if (href.includes('instagram.com')) return { type: 'instagram', node: anchor };
+          if (href.includes('facebook.com') || href.includes('fb.com')) return { type: 'facebook', node: anchor };
+          if (href.includes('tiktok.com')) return { type: 'tiktok', node: anchor };
+          if (href.includes('youtube.com') || href.includes('youtu.be')) return { type: 'youtube', node: anchor };
+          if (href.includes('maps.google') || href.includes('goo.gl/maps') || href.includes('google.com/maps')) return { type: 'maps', node: anchor };
+          if (href.startsWith('tel:')) return { type: 'phone', node: anchor };
+          if (href.startsWith('mailto:')) return { type: 'email', node: anchor };
+          return { type: 'button', node: anchor };
+        }
+
+        var tag = el.tagName.toLowerCase();
+        if (tag === 'img') {
+          var cls = (el.className || '').toLowerCase();
+          var alt = (el.alt || '').toLowerCase();
+          var id = (el.id || '').toLowerCase();
+          var bioImg = (el.getAttribute('data-bio-image') || '').toLowerCase();
+          var isLogo = bioImg.includes('logo') || cls.includes('logo') || alt.includes('logo') || id.includes('logo') || !!el.closest('.logo, header, [class*="logo"]');
+          return { type: isLogo ? 'logo' : 'image', node: el };
+        }
+
+        if (tag === 'button') return { type: 'button', node: el };
+        if (['h1', 'h2', 'h3', 'h4', 'h5', 'h6'].includes(tag)) return { type: 'title', node: el };
+        return { type: 'text', node: el };
+      }
+
+      // Helper to parse WhatsApp info from URL
+      function extractWaInfo(url) {
+        var phone = '';
+        var message = '';
+        if (!url) return { phone: phone, message: message };
+        try {
+          var clean = url.trim();
+          if (clean.includes('wa.me/')) {
+            var parts = clean.split('wa.me/')[1] || '';
+            var splitQ = parts.split('?');
+            phone = splitQ[0] ? splitQ[0].replace(/\\D/g, '') : '';
+            if (splitQ[1]) {
+              var params = new URLSearchParams(splitQ[1]);
+              message = params.get('text') || '';
+            }
+          } else if (clean.includes('whatsapp.com/send')) {
+            var q = clean.split('?')[1] || '';
+            var p = new URLSearchParams(q);
+            phone = (p.get('phone') || '').replace(/\\D/g, '');
+            message = p.get('text') || '';
+          }
+        } catch(e) {}
+        return { phone: phone, message: message };
+      }
 
       // Listen to commands from parent editor
       window.addEventListener('message', function(e) {
         if (!e.data) return;
-        if (e.data.type === 'BIO_FACIL_SET_INSPECTOR') {
-          isInspectorActive = !!e.data.enabled;
-        } else if (e.data.type === 'BIO_FACIL_FOCUS_ELEMENT') {
-          var fieldId = e.data.fieldId;
-          if (!fieldId) return;
-          var el = document.querySelector('[data-bio-text="' + fieldId + '"]') ||
-                   document.querySelector('[data-bio-image="' + fieldId + '"]') ||
-                   document.querySelector('[data-bio-link="' + fieldId + '"]') ||
-                   document.getElementById(fieldId);
+        var data = e.data;
+
+        if (data.type === 'BIO_FACIL_SET_INSPECTOR') {
+          isInspectorActive = !!data.enabled;
+          if (!isInspectorActive && currentSelectedEl) {
+            currentSelectedEl.style.outline = '';
+            currentSelectedEl.style.outlineOffset = '';
+            currentSelectedEl = null;
+          }
+        } else if (data.type === 'BIO_FACIL_DESELECT') {
+          if (currentSelectedEl) {
+            currentSelectedEl.style.outline = '';
+            currentSelectedEl.style.outlineOffset = '';
+            currentSelectedEl = null;
+          }
+        } else if (data.type === 'BIO_FACIL_UPDATE_DOM_ELEMENT') {
+          var semType = data.semanticType;
+          var eid = data.elementId;
+          var val = data.value;
+          var attr = data.attr;
+
+          // Immediate universal update for WhatsApp links
+          if (semType === 'whatsapp' || eid === 'whatsapp') {
+            var waEls = document.querySelectorAll('a[href*="wa.me"], a[href*="whatsapp"], a[href*="api.whatsapp.com"], [data-bio-link="whatsapp"]');
+            waEls.forEach(function(l) { l.setAttribute('href', val); });
+          } else if (semType === 'instagram' || eid === 'instagram') {
+            var inEls = document.querySelectorAll('a[href*="instagram.com"], [data-bio-link="instagram"]');
+            inEls.forEach(function(l) { l.setAttribute('href', val); });
+          } else if (semType === 'logo' || eid === 'logo') {
+            var logoImgs = document.querySelectorAll('img[data-bio-image="logo"], img[data-bio-image="logo_principal"], .logo img, [class*="logo"] img, img[alt*="logo" i]');
+            if (logoImgs.length > 0) {
+              logoImgs.forEach(function(img) {
+                img.setAttribute('src', val);
+                if (img.hasAttribute('srcset')) img.removeAttribute('srcset');
+              });
+            } else if (eid) {
+              var specificLogo = document.querySelector('[data-bio-eid="' + eid + '"]') || document.getElementById(eid);
+              if (specificLogo) specificLogo.setAttribute('src', val);
+            }
+          } else if (eid) {
+            var matchEl = document.querySelector('[data-bio-eid="' + eid + '"]') ||
+                          document.querySelector('[data-bio-text="' + eid + '"]') ||
+                          document.querySelector('[data-bio-image="' + eid + '"]') ||
+                          document.querySelector('[data-bio-link="' + eid + '"]') ||
+                          document.getElementById(eid);
+            if (matchEl) {
+              if (attr === 'src' || matchEl.tagName.toLowerCase() === 'img') {
+                matchEl.setAttribute('src', val);
+                if (matchEl.hasAttribute('srcset')) matchEl.removeAttribute('srcset');
+              } else if (attr === 'href' || matchEl.tagName.toLowerCase() === 'a') {
+                matchEl.setAttribute('href', val);
+              } else {
+                matchEl.textContent = val;
+              }
+            }
+          }
+        } else if (data.type === 'BIO_FACIL_FOCUS_ELEMENT') {
+          var targetId = data.fieldId || data.elementId;
+          if (!targetId) return;
+          var el = document.querySelector('[data-bio-eid="' + targetId + '"]') ||
+                   document.querySelector('[data-bio-text="' + targetId + '"]') ||
+                   document.querySelector('[data-bio-image="' + targetId + '"]') ||
+                   document.querySelector('[data-bio-link="' + targetId + '"]') ||
+                   document.getElementById(targetId);
           if (el) {
             el.scrollIntoView({ behavior: 'smooth', block: 'center' });
-            var prevOutline = el.style.outline;
-            var prevBoxShadow = el.style.boxShadow;
-            var prevTransition = el.style.transition;
-            el.style.transition = 'all 0.3s ease';
-            el.style.outline = '3px solid #a855f7';
-            el.style.outlineOffset = '4px';
-            el.style.boxShadow = '0 0 25px rgba(168, 85, 247, 0.6)';
-            setTimeout(function() {
-              el.style.outline = prevOutline;
-              el.style.boxShadow = prevBoxShadow;
-              el.style.transition = prevTransition;
-            }, 1800);
+            if (currentSelectedEl && currentSelectedEl !== el) {
+              currentSelectedEl.style.outline = '';
+              currentSelectedEl.style.outlineOffset = '';
+            }
+            currentSelectedEl = el;
+            el.style.outline = '2px solid #a855f7';
+            el.style.outlineOffset = '3px';
           }
         }
       });
 
-      // Hover glow when inspector is active
-      var currentHoverEl = null;
+      // Hover outline when inspector is active
       document.addEventListener('mouseover', function(e) {
         if (!isInspectorActive) return;
-        var target = e.target.closest('[data-bio-text], [data-bio-image], [data-bio-link], a, button, img, h1, h2, h3, p');
-        if (!target) return;
-        if (currentHoverEl && currentHoverEl !== target) {
+        var target = e.target.closest('[data-bio-text], [data-bio-image], [data-bio-link], [data-bio-eid], a, button, img, h1, h2, h3, h4, h5, h6, p, span');
+        if (!target || target === currentSelectedEl) return;
+        if (currentHoverEl && currentHoverEl !== target && currentHoverEl !== currentSelectedEl) {
           currentHoverEl.style.outline = '';
+          currentHoverEl.style.outlineOffset = '';
         }
         currentHoverEl = target;
         target.style.outline = '2px dashed rgba(168, 85, 247, 0.6)';
@@ -1299,48 +1576,66 @@ export function injectVisualInspectorScript(
       }, true);
 
       document.addEventListener('mouseout', function(e) {
-        if (currentHoverEl) {
+        if (currentHoverEl && currentHoverEl !== currentSelectedEl) {
           currentHoverEl.style.outline = '';
+          currentHoverEl.style.outlineOffset = '';
           currentHoverEl.style.cursor = '';
           currentHoverEl = null;
         }
       }, true);
 
-      // Click to edit
+      // Click to select and edit
       document.addEventListener('click', function(e) {
         if (!isInspectorActive) return;
-        var target = e.target.closest('[data-bio-text], [data-bio-image], [data-bio-link], a, button, img, h1, h2, h3, p');
-        if (!target) return;
+        var clickedNode = e.target.closest('[data-bio-text], [data-bio-image], [data-bio-link], [data-bio-eid], a, button, img, h1, h2, h3, h4, h5, h6, p, span');
+        if (!clickedNode) return;
         
         e.preventDefault();
         e.stopPropagation();
 
+        var sem = detectSemantic(clickedNode);
+        var target = sem.node;
+
+        if (currentSelectedEl && currentSelectedEl !== target) {
+          currentSelectedEl.style.outline = '';
+          currentSelectedEl.style.outlineOffset = '';
+        }
+        currentSelectedEl = target;
+        target.style.outline = '2px solid #a855f7';
+        target.style.outlineOffset = '3px';
+
         var bioText = target.getAttribute('data-bio-text');
         var bioImage = target.getAttribute('data-bio-image');
         var bioLink = target.getAttribute('data-bio-link');
+        var bioEid = target.getAttribute('data-bio-eid');
+        if (!bioEid) {
+          bioEid = 'bio_el_' + Math.random().toString(36).substr(2, 6);
+          target.setAttribute('data-bio-eid', bioEid);
+        }
 
         var fieldId = bioText || bioImage || bioLink || '';
-        var attr = (target.tagName.toLowerCase() === 'img') ? 'src' : (target.tagName.toLowerCase() === 'a' ? 'href' : 'text');
+        var elementId = fieldId || bioEid;
+        var tag = target.tagName.toLowerCase();
+        var attr = (tag === 'img') ? 'src' : (tag === 'a' ? 'href' : 'text');
         var value = (attr === 'src') ? target.getAttribute('src') : (attr === 'href' ? target.getAttribute('href') : (target.textContent || '').trim());
+        var href = target.getAttribute('href') || '';
+        var waInfo = sem.type === 'whatsapp' ? extractWaInfo(href) : { phone: '', message: '' };
 
         window.parent.postMessage({
           type: 'BIO_FACIL_ELEMENT_CLICKED',
           fieldId: fieldId,
-          tagName: target.tagName.toLowerCase(),
+          elementId: elementId,
+          bioEid: bioEid,
+          semanticType: sem.type,
+          tagName: tag,
           attr: attr,
-          value: value
+          value: value,
+          text: (target.textContent || '').trim(),
+          src: target.getAttribute('src') || '',
+          href: href,
+          phone: waInfo.phone,
+          message: waInfo.message
         }, '*');
-
-        // Flash purple neon outline
-        var prevOutline = target.style.outline;
-        var prevShadow = target.style.boxShadow;
-        target.style.outline = '3px solid #a855f7';
-        target.style.outlineOffset = '3px';
-        target.style.boxShadow = '0 0 20px rgba(168, 85, 247, 0.7)';
-        setTimeout(function() {
-          target.style.outline = prevOutline;
-          target.style.boxShadow = prevShadow;
-        }, 1200);
       }, true);
     })();
   </script>
