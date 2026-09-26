@@ -84,9 +84,10 @@ export const AdminDashboard: React.FC = () => {
   const filteredUsers = useMemo(() => {
     return allUsers.filter((u) => {
       const matchStatus = userTab === 'all' ? true : u.status === userTab;
-      const matchSearch =
-        u.email.toLowerCase().includes(userSearch.toLowerCase()) ||
-        u.displayName.toLowerCase().includes(userSearch.toLowerCase());
+      const email = (u.email || '').toLowerCase();
+      const name = (u.displayName || u.name || '').toLowerCase();
+      const search = userSearch.toLowerCase().trim();
+      const matchSearch = !search || email.includes(search) || name.includes(search);
       return matchStatus && matchSearch;
     });
   }, [allUsers, userTab, userSearch]);
@@ -787,31 +788,59 @@ export const AdminDashboard: React.FC = () => {
                     </div>
                   </div>
 
-                  {/* Actions: APROVAR | REJEITAR | BLOQUEAR | DESBLOQUEAR */}
+                  {/* Actions: APROVAR | RECUSAR | BLOQUEAR | DESBLOQUEAR */}
                   <div className="flex items-center gap-2">
-                    {u.status !== 'approved' && (
-                      <button
-                        onClick={() => updateUserStatus(u.uid, 'approved')}
-                        className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white font-semibold rounded-lg text-xs flex items-center gap-1 shadow-sm"
-                      >
-                        <CheckCircle2 size={13} />
-                        <span>APROVAR</span>
-                      </button>
+                    {u.status === 'pending' && (
+                      <div className="flex items-center gap-1.5">
+                        <button
+                          onClick={() => updateUserStatus(u.uid, 'approved')}
+                          className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white font-semibold rounded-lg text-xs flex items-center gap-1 shadow-sm transition-all"
+                        >
+                          <CheckCircle2 size={13} />
+                          <span>APROVAR</span>
+                        </button>
+
+                        <button
+                          onClick={() => updateUserStatus(u.uid, 'rejected')}
+                          className="px-3 py-1.5 bg-[#1f1724] hover:bg-rose-950 text-rose-300 border border-rose-500/30 rounded-lg text-xs transition-colors"
+                        >
+                          RECUSAR
+                        </button>
+
+                        <button
+                          onClick={() => updateUserStatus(u.uid, 'blocked')}
+                          className="px-2.5 py-1.5 bg-[#171526] hover:bg-rose-950 text-gray-400 hover:text-rose-300 border border-white/10 rounded-lg text-xs flex items-center gap-1 transition-colors"
+                          title="Bloquear usuário"
+                        >
+                          <Ban size={12} />
+                          <span>BLOQUEAR</span>
+                        </button>
+                      </div>
                     )}
 
-                    {u.status === 'pending' && (
-                      <button
-                        onClick={() => updateUserStatus(u.uid, 'rejected')}
-                        className="px-3 py-1.5 bg-[#1f1724] hover:bg-rose-950 text-rose-300 border border-rose-500/30 rounded-lg text-xs"
-                      >
-                        REJEITAR
-                      </button>
+                    {u.status === 'rejected' && (
+                      <div className="flex items-center gap-1.5">
+                        <button
+                          onClick={() => updateUserStatus(u.uid, 'approved')}
+                          className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white font-semibold rounded-lg text-xs flex items-center gap-1 shadow-sm transition-all"
+                        >
+                          <CheckCircle2 size={13} />
+                          <span>APROVAR</span>
+                        </button>
+                        <button
+                          onClick={() => updateUserStatus(u.uid, 'blocked')}
+                          className="px-2.5 py-1.5 bg-[#171526] hover:bg-rose-950 text-gray-400 hover:text-rose-300 border border-white/10 rounded-lg text-xs flex items-center gap-1 transition-colors"
+                        >
+                          <Ban size={12} />
+                          <span>BLOQUEAR</span>
+                        </button>
+                      </div>
                     )}
 
                     {u.status === 'approved' && (
                       <button
                         onClick={() => updateUserStatus(u.uid, 'blocked')}
-                        className="px-3 py-1.5 bg-[#171526] hover:bg-rose-950 text-gray-300 hover:text-rose-300 border border-white/10 rounded-lg text-xs flex items-center gap-1"
+                        className="px-3 py-1.5 bg-[#171526] hover:bg-rose-950 text-gray-300 hover:text-rose-300 border border-white/10 rounded-lg text-xs flex items-center gap-1 transition-colors"
                       >
                         <Ban size={12} />
                         <span>BLOQUEAR</span>
@@ -821,7 +850,7 @@ export const AdminDashboard: React.FC = () => {
                     {u.status === 'blocked' && (
                       <button
                         onClick={() => updateUserStatus(u.uid, 'approved')}
-                        className="px-3 py-1.5 bg-emerald-950 text-emerald-300 border border-emerald-500/30 rounded-lg text-xs flex items-center gap-1"
+                        className="px-3 py-1.5 bg-emerald-950 hover:bg-emerald-900 text-emerald-300 border border-emerald-500/30 rounded-lg text-xs flex items-center gap-1 transition-colors"
                       >
                         <CheckCircle2 size={12} />
                         <span>DESBLOQUEAR</span>

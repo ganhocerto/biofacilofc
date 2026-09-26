@@ -139,16 +139,20 @@ export const AuthModal: React.FC<AuthModalProps> = ({
 
         {registeredPending ? (
           <div className="text-center py-6 space-y-4">
-            <div className="w-16 h-16 mx-auto rounded-2xl bg-amber-500/10 border border-amber-500/30 flex items-center justify-center text-amber-400 shadow-[0_0_20px_rgba(245,158,11,0.2)]">
+            <div className="w-16 h-16 mx-auto rounded-2xl bg-amber-500/15 border border-amber-500/30 flex items-center justify-center text-amber-400 shadow-[0_0_20px_rgba(245,158,11,0.2)]">
               <CheckCircle2 size={32} />
             </div>
-            <h3 className="text-xl font-display font-bold text-white">
-              Cadastro Realizado!
+            <h3 className="text-xl font-display font-bold text-white tracking-tight">
+              CONTA EM ANÁLISE
             </h3>
-            <p className="text-xs text-gray-300 leading-relaxed bg-[#131122] p-4 rounded-2xl border border-purple-500/20 text-left">
-              Sua conta foi criada com sucesso e está <strong className="text-amber-300">aguardando aprovação do administrador</strong>.
-              Você receberá a liberação para começar a criar e personalizar seus biosites.
-            </p>
+            <div className="text-xs text-gray-300 leading-relaxed bg-[#131122] p-4 rounded-2xl border border-purple-500/20 text-center space-y-1.5">
+              <p className="font-semibold text-amber-300">
+                Seu cadastro foi realizado com sucesso.
+              </p>
+              <p className="text-gray-400">
+                Aguarde a aprovação do administrador para acessar o BIO FÁCIL.
+              </p>
+            </div>
             <button
               onClick={() => {
                 setRegisteredPending(false);

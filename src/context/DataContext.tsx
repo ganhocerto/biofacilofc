@@ -64,52 +64,43 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
     return () => clearTimeout(timer);
   }, []);
 
-  // 1. Seed initial data (callable manually by admin)
+  // 1. Seed initial data (non-destructive: only seeds if collections are completely empty)
   const seedInitialDataIfEmpty = async () => {
     if (!isAdmin) return;
     try {
-      // Check niches - ensure official niches exist in Firestore
+      // Check niches - only seed if completely empty; NEVER delete existing niches!
       const nichesSnap = await getDocs(collection(db, 'niches')).catch(() => null);
-      const existingDocs = nichesSnap?.docs || [];
-      const initialIds = new Set(INITIAL_NICHES.map((n) => n.id));
-
-      // Remove obsolete niche documents if any
-      for (const d of existingDocs) {
-        if (!initialIds.has(d.id)) {
-          await deleteDoc(doc(db, 'niches', d.id)).catch(() => {});
+      if (!nichesSnap || nichesSnap.empty) {
+        for (const item of INITIAL_NICHES) {
+          await setDoc(
+            doc(db, 'niches', item.id),
+            {
+              ...item,
+              createdAt: new Date().toISOString(),
+              updatedAt: new Date().toISOString(),
+            },
+            { merge: true }
+          ).catch(() => {});
         }
       }
 
-      // Upsert official niches
-      for (const item of INITIAL_NICHES) {
-        const existingDoc = existingDocs.find((d) => d.id === item.id);
-        const data = existingDoc?.data();
-        await setDoc(
-          doc(db, 'niches', item.id),
-          {
-            ...item,
-            name: item.name,
-            description: '',
-            createdAt: data?.createdAt || new Date().toISOString(),
-            updatedAt: new Date().toISOString(),
-          },
-          { merge: true }
-        ).catch(() => {});
-      }
-
-      // Check templates
+      // Check templates - only seed if completely empty; NEVER overwrite or delete existing models!
       const templatesSnap = await getDocs(collection(db, 'templates')).catch(() => null);
       if (!templatesSnap || templatesSnap.empty) {
         for (const item of INITIAL_TEMPLATES) {
-          await setDoc(doc(db, 'templates', item.id), {
-            ...item,
-            createdAt: new Date().toISOString(),
-            updatedAt: new Date().toISOString(),
-          }).catch(() => {});
+          await setDoc(
+            doc(db, 'templates', item.id),
+            {
+              ...item,
+              createdAt: new Date().toISOString(),
+              updatedAt: new Date().toISOString(),
+            },
+            { merge: true }
+          ).catch(() => {});
         }
       }
     } catch (err) {
-      console.warn('Erro ao sincronizar dados iniciais:', err);
+      console.warn('Aviso ao verificar dados iniciais:', err);
     }
   };
 
@@ -272,18 +263,33 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
       return;
     }
 
-    const q = query(collection(db, 'users'), orderBy('createdAt', 'desc'));
+    // Query collection directly without orderBy so no users are omitted due to missing fields or missing indexes
+    const q = collection(db, 'users');
     const unsubscribe = onSnapshot(
       q,
       (snapshot) => {
         const list: UserProfile[] = [];
-        snapshot.forEach((doc) => {
-          list.push(doc.data() as UserProfile);
+        snapshot.forEach((docSnap) => {
+          const data = docSnap.data() as Partial<UserProfile>;
+          const cleanName = data.displayName || data.name || (data.email ? data.email.split('@')[0] : 'Usuário');
+          list.push({
+            uid: data.uid || docSnap.id,
+            email: data.email || '',
+            displayName: cleanName,
+            name: cleanName,
+            role: data.role || 'user',
+            status: data.status || 'pending',
+            createdAt: data.createdAt || new Date().toISOString(),
+            updatedAt: data.updatedAt || new Date().toISOString(),
+          });
         });
+
+        // In-memory sort by createdAt descending
+        list.sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime());
         setAllUsers(list);
       },
       (error) => {
-        console.warn('Erro ao carregar lista de usuários para admin:', error);
+        console.error('Erro ao carregar lista de usuários para admin:', error);
       }
     );
 
@@ -293,19 +299,27 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
   // Actions
   const addNiche = async (niche: Omit<Niche, 'createdAt' | 'updatedAt'>) => {
     const docRef = doc(db, 'niches', niche.id);
-    await setDoc(docRef, {
-      ...niche,
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-    });
+    await setDoc(
+      docRef,
+      {
+        ...niche,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      },
+      { merge: true }
+    );
   };
 
   const updateNiche = async (id: string, data: Partial<Niche>) => {
     const docRef = doc(db, 'niches', id);
-    await updateDoc(docRef, {
-      ...data,
-      updatedAt: new Date().toISOString(),
-    });
+    await setDoc(
+      docRef,
+      {
+        ...data,
+        updatedAt: new Date().toISOString(),
+      },
+      { merge: true }
+    );
   };
 
   const deleteNiche = async (id: string) => {
@@ -314,26 +328,41 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const addTemplate = async (template: Omit<BiositeTemplate, 'createdAt' | 'updatedAt'>) => {
     const docRef = doc(db, 'templates', template.id);
-    await setDoc(docRef, {
+    const newTemplateData: BiositeTemplate = {
       ...template,
-      createdAt: new Date().toISOString(),
+      createdAt: (template as any).createdAt || new Date().toISOString(),
       updatedAt: new Date().toISOString(),
-    });
+    };
+    // Persist to Firestore with merge: true to avoid deleting or corrupting existing data
+    await setDoc(docRef, newTemplateData, { merge: true });
+    // Also update in-memory full template cache
+    fullTemplatesCache.current.set(template.id, newTemplateData);
   };
 
   const updateTemplate = async (id: string, data: Partial<BiositeTemplate>) => {
     const docRef = doc(db, 'templates', id);
-    await updateDoc(docRef, {
+    const updatePayload = {
       ...data,
       updatedAt: new Date().toISOString(),
-    });
+    };
+    // Persist to Firestore with merge: true so ONLY modified fields change and the rest remains intact
+    await setDoc(docRef, updatePayload, { merge: true });
+    // Update cache
+    const cached = fullTemplatesCache.current.get(id);
+    if (cached) {
+      fullTemplatesCache.current.set(id, { ...cached, ...updatePayload });
+    }
   };
 
   const deleteTemplate = async (id: string) => {
     await deleteDoc(doc(db, 'templates', id));
+    fullTemplatesCache.current.delete(id);
   };
 
   const saveProject = async (project: Partial<UserProject> & { id: string; userId: string }) => {
+    if (!currentUser || (!isApproved && !isAdmin)) {
+      throw new Error('Apenas usuários aprovados podem criar ou salvar projetos.');
+    }
     const docRef = doc(db, 'projects', project.id);
     const snap = await getDoc(docRef).catch(() => null);
     const existingCreatedAt = snap?.exists() ? snap.data()?.createdAt : null;
@@ -374,7 +403,8 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
         await deleteDoc(doc(db, 'admins', uid)).catch(() => {});
       }
     }
-    await updateDoc(userRef, updates);
+    // Use setDoc with merge: true for safe updates
+    await setDoc(userRef, updates, { merge: true });
   };
 
   return (

@@ -13,6 +13,7 @@ import {
   getDoc,
   setDoc,
   updateDoc,
+  onSnapshot,
   type FirebaseUser
 } from '../firebase';
 import { UserProfile, UserRole, UserStatus } from '../types';
@@ -54,6 +55,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const fetchOrCreateProfile = async (user: FirebaseUser): Promise<UserProfile> => {
     const isSuperAdmin = isBootstrapAdminEmail(user.email);
     const userRef = doc(db, 'users', user.uid);
+    const cleanEmail = (user.email || '').trim().toLowerCase();
     
     try {
       const snapPromise = getDoc(userRef);
@@ -73,7 +75,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           // Also register in admins collection
           await setDoc(doc(db, 'admins', user.uid), {
             uid: user.uid,
-            email: user.email,
+            email: cleanEmail,
             assignedAt: new Date().toISOString(),
           }, { merge: true }).catch(() => {});
           return { ...data, ...updated };
@@ -83,25 +85,27 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         // Create new profile
         const newRole: UserRole = isSuperAdmin ? 'admin' : 'user';
         const newStatus: UserStatus = isSuperAdmin ? 'approved' : 'pending';
+        const displayName = user.displayName?.trim() || (user.email ? user.email.split('@')[0] : 'Usuário');
 
         const newProfile: UserProfile = {
           uid: user.uid,
-          email: user.email || '',
-          displayName: user.displayName || (user.email ? user.email.split('@')[0] : 'Usuário'),
+          email: cleanEmail,
+          displayName,
+          name: displayName,
           role: newRole,
           status: newStatus,
           createdAt: new Date().toISOString(),
           updatedAt: new Date().toISOString(),
         };
 
-        await setDoc(userRef, newProfile).catch(() => {});
+        await setDoc(userRef, newProfile, { merge: true });
 
         if (isSuperAdmin) {
           await setDoc(doc(db, 'admins', user.uid), {
             uid: user.uid,
-            email: user.email,
+            email: cleanEmail,
             assignedAt: new Date().toISOString(),
-          }).catch(() => {});
+          }, { merge: true }).catch(() => {});
         }
 
         return newProfile;
@@ -111,10 +115,12 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
 
     // Defensive fallback profile in case of network timeout
+    const fallbackName = user.displayName?.trim() || (user.email ? user.email.split('@')[0] : 'Usuário');
     return {
       uid: user.uid,
-      email: user.email || '',
-      displayName: user.displayName || (user.email ? user.email.split('@')[0] : 'Usuário'),
+      email: cleanEmail,
+      displayName: fallbackName,
+      name: fallbackName,
       role: isSuperAdmin ? 'admin' : 'user',
       status: isSuperAdmin ? 'approved' : 'pending',
       createdAt: new Date().toISOString(),
@@ -135,13 +141,34 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       setLoading(false);
     }, 2500);
 
+    let userDocUnsub: (() => void) | null = null;
+
     const unsubscribe = onAuthStateChanged(auth, async (user) => {
       clearTimeout(safetyTimer);
+      if (userDocUnsub) {
+        userDocUnsub();
+        userDocUnsub = null;
+      }
+
       setCurrentUser(user);
       if (user) {
         try {
           const profile = await fetchOrCreateProfile(user);
           setUserProfile(profile);
+
+          // Listen to real-time status/role changes (e.g. when admin approves the user)
+          userDocUnsub = onSnapshot(
+            doc(db, 'users', user.uid),
+            (docSnap: any) => {
+              if (docSnap.exists()) {
+                const data = docSnap.data() as UserProfile;
+                setUserProfile(data);
+              }
+            },
+            (err: any) => {
+              console.warn('Erro ao escutar atualizações do perfil:', err);
+            }
+          );
         } catch (err) {
           console.error('Erro ao obter perfil do usuário:', err);
         }
@@ -153,40 +180,45 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
     return () => {
       clearTimeout(safetyTimer);
+      if (userDocUnsub) {
+        userDocUnsub();
+      }
       unsubscribe();
     };
   }, []);
 
   const loginWithEmail = async (email: string, pass: string) => {
+    const cleanEmail = email.trim().toLowerCase();
     try {
-      await signInWithEmailAndPassword(auth, email, pass);
+      await signInWithEmailAndPassword(auth, cleanEmail, pass);
     } catch (err: any) {
       // If this is the bootstrap admin email and user does not exist in Firebase Auth yet,
       // automatically create and provision the admin account on first login!
       if (
-        isBootstrapAdminEmail(email) &&
+        isBootstrapAdminEmail(cleanEmail) &&
         (err.code === 'auth/user-not-found' ||
           err.code === 'auth/invalid-credential' ||
           err.code === 'auth/invalid-login-credentials')
       ) {
         try {
-          const cred = await createUserWithEmailAndPassword(auth, email, pass);
+          const cred = await createUserWithEmailAndPassword(auth, cleanEmail, pass);
           if (cred.user) {
             const adminProfile: UserProfile = {
               uid: cred.user.uid,
-              email: email,
+              email: cleanEmail,
               displayName: 'Administrador BIO FÁCIL',
+              name: 'Administrador BIO FÁCIL',
               role: 'admin',
               status: 'approved',
               createdAt: new Date().toISOString(),
               updatedAt: new Date().toISOString(),
             };
-            await setDoc(doc(db, 'users', cred.user.uid), adminProfile);
+            await setDoc(doc(db, 'users', cred.user.uid), adminProfile, { merge: true });
             await setDoc(doc(db, 'admins', cred.user.uid), {
               uid: cred.user.uid,
-              email,
+              email: cleanEmail,
               assignedAt: new Date().toISOString(),
-            });
+            }, { merge: true });
             setUserProfile(adminProfile);
             return;
           }
@@ -200,26 +232,34 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   };
 
   const registerWithEmail = async (name: string, email: string, pass: string) => {
-    const cred = await createUserWithEmailAndPassword(auth, email, pass);
+    const cleanEmail = email.trim().toLowerCase();
+    const cleanName = name.trim();
+    const cred = await createUserWithEmailAndPassword(auth, cleanEmail, pass);
     if (cred.user) {
-      const isSuperAdmin = isBootstrapAdminEmail(email);
+      const isSuperAdmin = isBootstrapAdminEmail(cleanEmail);
+      const userRef = doc(db, 'users', cred.user.uid);
       const newProfile: UserProfile = {
         uid: cred.user.uid,
-        email: email,
-        displayName: name,
+        email: cleanEmail,
+        displayName: cleanName,
+        name: cleanName,
         role: isSuperAdmin ? 'admin' : 'user',
         status: isSuperAdmin ? 'approved' : 'pending',
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
       };
-      await setDoc(doc(db, 'users', cred.user.uid), newProfile);
+      
+      // Save to users collection with merge: true so it is safely written
+      await setDoc(userRef, newProfile, { merge: true });
+      
       if (isSuperAdmin) {
         await setDoc(doc(db, 'admins', cred.user.uid), {
           uid: cred.user.uid,
-          email,
+          email: cleanEmail,
           assignedAt: new Date().toISOString(),
-        });
+        }, { merge: true });
       }
+      
       setUserProfile(newProfile);
     }
   };

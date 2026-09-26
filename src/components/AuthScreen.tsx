@@ -166,13 +166,18 @@ export const AuthScreen: React.FC = () => {
                 <CheckCircle2 size={32} />
               </div>
 
-              <h2 className="text-lg font-display font-bold text-white">
-                Cadastro Realizado!
+              <h2 className="text-2xl font-display font-black text-white tracking-tight">
+                CONTA EM ANÁLISE
               </h2>
 
-              <p className="text-xs text-gray-300 leading-relaxed max-w-sm mx-auto">
-                Seu cadastro foi realizado com sucesso. Aguardando aprovação do administrador para liberar seu acesso à plataforma.
-              </p>
+              <div className="text-xs text-gray-300 leading-relaxed max-w-sm mx-auto bg-[#131122] p-4 rounded-2xl border border-purple-500/20 text-center space-y-1.5">
+                <p className="font-semibold text-amber-300">
+                  Seu cadastro foi realizado com sucesso.
+                </p>
+                <p className="text-gray-400">
+                  Aguarde a aprovação do administrador para acessar o BIO FÁCIL.
+                </p>
+              </div>
 
               <button
                 onClick={() => {
