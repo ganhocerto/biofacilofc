@@ -16,6 +16,14 @@ import {
 import { useAuth } from './AuthContext';
 import { Niche, BiositeTemplate, UserProject, UserProfile } from '../types';
 import { INITIAL_NICHES, INITIAL_TEMPLATES } from '../data/initialData';
+import {
+  getLocalUsersMirror,
+  updateUserInLocalMirror,
+  getLocalTemplatesMirror,
+  saveTemplateToLocalMirror,
+  updateTemplateInLocalMirror,
+  deleteTemplateFromLocalMirror
+} from '../utils/persistence';
 
 interface DataContextType {
   niches: Niche[];
@@ -40,18 +48,32 @@ const DataContext = createContext<DataContextType | undefined>(undefined);
 
 export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const { currentUser, isAdmin, isApproved } = useAuth();
+  
+  // Combine INITIAL_TEMPLATES with local mirror on mount so all models are immediately ready
+  const getInitialUnifiedTemplates = (): BiositeTemplate[] => {
+    const mirror = getLocalTemplatesMirror();
+    const map = new Map<string, BiositeTemplate>();
+    INITIAL_TEMPLATES.forEach((t) => map.set(t.id, t));
+    mirror.forEach((t) => map.set(t.id, { ...map.get(t.id), ...t }));
+    return Array.from(map.values());
+  };
+
   const [niches, setNiches] = useState<Niche[]>(INITIAL_NICHES as Niche[]);
-  const [templates, setTemplates] = useState<BiositeTemplate[]>(INITIAL_TEMPLATES);
+  const [templates, setTemplates] = useState<BiositeTemplate[]>(getInitialUnifiedTemplates);
   const [userProjects, setUserProjects] = useState<UserProject[]>([]);
-  const [allUsers, setAllUsers] = useState<UserProfile[]>([]);
+  const [allUsers, setAllUsers] = useState<UserProfile[]>(() => getLocalUsersMirror());
   const [loadingData, setLoadingData] = useState(true);
 
-  // In-memory cache for full template HTML to ensure zero lag and lazy loading
+  // In-memory cache for full template HTML to guarantee zero lag and zero black screens
   const fullTemplatesCache = React.useRef<Map<string, BiositeTemplate>>(new Map());
 
-  // Populate cache with initial templates
+  // Populate cache on mount
   useEffect(() => {
     INITIAL_TEMPLATES.forEach((t) => {
+      fullTemplatesCache.current.set(t.id, t);
+    });
+    const mirror = getLocalTemplatesMirror();
+    mirror.forEach((t) => {
       fullTemplatesCache.current.set(t.id, t);
     });
   }, []);
@@ -97,10 +119,11 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
             },
             { merge: true }
           ).catch(() => {});
+          saveTemplateToLocalMirror(item);
         }
       }
     } catch (err) {
-      console.warn('Aviso ao verificar dados iniciais:', err);
+      console.warn('[Bio Fácil Data] Aviso ao verificar dados iniciais:', err);
     }
   };
 
@@ -111,10 +134,9 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
       q,
       (snapshot) => {
         const list: Niche[] = [];
-        snapshot.forEach((doc) => {
-          list.push(doc.data() as Niche);
+        snapshot.forEach((docSnap) => {
+          list.push(docSnap.data() as Niche);
         });
-        // Sort in memory by order
         list.sort((a, b) => (a.order || 99) - (b.order || 99));
 
         if (list.length > 0) {
@@ -124,7 +146,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
         }
       },
       (error) => {
-        console.warn('Erro ao escutar nichos, utilizando nichos padrão:', error);
+        console.warn('[Bio Fácil Data] Aviso ao escutar nichos, utilizando nichos base:', error);
         setNiches(INITIAL_NICHES as Niche[]);
       }
     );
@@ -132,7 +154,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
     return () => unsubscribe();
   }, []);
 
-  // 3. Listen to Templates (with in-memory sorting to avoid composite index failure)
+  // 3. Listen to Templates (with fallback to unified templates + local mirror)
   useEffect(() => {
     let q;
     if (isAdmin) {
@@ -147,36 +169,48 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
     const unsubscribe = onSnapshot(
       q,
       (snapshot) => {
-        const list: BiositeTemplate[] = [];
-        snapshot.forEach((doc) => {
-          const data = doc.data() as BiositeTemplate;
-          list.push(data);
-          if (data.htmlContent) {
-            fullTemplatesCache.current.set(data.id, data);
+        const map = new Map<string, BiositeTemplate>();
+        
+        // 1. Base initial templates
+        INITIAL_TEMPLATES.forEach((t) => {
+          if (isAdmin || t.status === 'published') {
+            map.set(t.id, t);
           }
         });
 
-        // In-memory sort by createdAt desc
+        // 2. Local mirror templates
+        const mirror = getLocalTemplatesMirror();
+        mirror.forEach((t) => {
+          if (isAdmin || t.status === 'published') {
+            map.set(t.id, { ...map.get(t.id), ...t });
+          }
+        });
+
+        // 3. Firestore live templates
+        snapshot.forEach((docSnap) => {
+          const data = docSnap.data() as BiositeTemplate;
+          map.set(data.id, { ...map.get(data.id), ...data });
+          if (data.htmlContent) {
+            fullTemplatesCache.current.set(data.id, data);
+            saveTemplateToLocalMirror(data);
+          }
+        });
+
+        const list = Array.from(map.values());
         list.sort((a, b) => {
           const dateA = new Date(a.createdAt || 0).getTime();
           const dateB = new Date(b.createdAt || 0).getTime();
           return dateB - dateA;
         });
 
-        if (list.length > 0) {
-          setTemplates(list);
-        } else {
-          const fallback = INITIAL_TEMPLATES.filter((t) => isAdmin || t.status === 'published');
-          setTemplates(fallback);
-          fallback.forEach((t) => fullTemplatesCache.current.set(t.id, t));
-        }
+        setTemplates(list);
         setLoadingData(false);
       },
       (error) => {
-        console.warn('Erro ao escutar templates, utilizando catálogo local:', error);
-        const fallback = INITIAL_TEMPLATES.filter((t) => isAdmin || t.status === 'published');
-        setTemplates(fallback);
-        fallback.forEach((t) => fullTemplatesCache.current.set(t.id, t));
+        console.warn('[Bio Fácil Data] Aviso ao escutar templates do Firestore, utilizando catálogo protegido:', error);
+        const unified = getInitialUnifiedTemplates().filter((t) => isAdmin || t.status === 'published');
+        setTemplates(unified);
+        unified.forEach((t) => fullTemplatesCache.current.set(t.id, t));
         setLoadingData(false);
       }
     );
@@ -194,30 +228,39 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
       }
     }
 
-    // 2. Fetch specific doc from Firestore with timeout
+    // 2. Check local mirror
+    const mirror = getLocalTemplatesMirror();
+    const mirrorMatch = mirror.find((t) => t.id === templateId);
+    if (mirrorMatch && mirrorMatch.htmlContent && mirrorMatch.htmlContent.trim().length > 0) {
+      fullTemplatesCache.current.set(templateId, mirrorMatch);
+      return mirrorMatch;
+    }
+
+    // 3. Fetch specific doc from Firestore
     try {
       const docRef = doc(db, 'templates', templateId);
       const snapPromise = getDoc(docRef);
-      const timeoutPromise = new Promise<null>((resolve) => setTimeout(() => resolve(null), 3500));
+      const timeoutPromise = new Promise<null>((resolve) => setTimeout(() => resolve(null), 3000));
       const snap = await Promise.race([snapPromise, timeoutPromise]);
 
       if (snap && snap.exists()) {
         const full = snap.data() as BiositeTemplate;
         fullTemplatesCache.current.set(templateId, full);
+        saveTemplateToLocalMirror(full);
         return full;
       }
     } catch (err) {
-      console.warn('Erro ao carregar HTML completo do Firestore:', err);
+      console.warn('[Bio Fácil Data] Aviso ao buscar modelo no Firestore:', err);
     }
 
-    // 3. Fallback to INITIAL_TEMPLATES
+    // 4. Fallback to INITIAL_TEMPLATES
     const initial = INITIAL_TEMPLATES.find((t) => t.id === templateId);
     if (initial) {
       fullTemplatesCache.current.set(templateId, initial);
       return initial;
     }
 
-    // 4. Fallback to template in state
+    // 5. Fallback to state
     const inState = templates.find((t) => t.id === templateId);
     if (inState) {
       return inState;
@@ -243,36 +286,43 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
       q,
       (snapshot) => {
         const list: UserProject[] = [];
-        snapshot.forEach((doc) => {
-          list.push(doc.data() as UserProject);
+        snapshot.forEach((docSnap) => {
+          list.push(docSnap.data() as UserProject);
         });
         setUserProjects(list);
       },
       (error) => {
-        console.warn('Erro ao escutar projetos do usuário:', error);
+        console.warn('[Bio Fácil Data] Aviso ao escutar projetos do usuário:', error);
       }
     );
 
     return () => unsubscribe();
   }, [currentUser, isApproved]);
 
-  // 5. Listen to All Users (Admin only)
+  // 5. Listen to All Users (Admin only) with resilient mirror merge & required console logging
   useEffect(() => {
     if (!isAdmin) {
       setAllUsers([]);
       return;
     }
 
-    // Query collection directly without orderBy so no users are omitted due to missing fields or missing indexes
+    console.log('[Bio Fácil Admin] Pending query started');
+
     const q = collection(db, 'users');
     const unsubscribe = onSnapshot(
       q,
       (snapshot) => {
-        const list: UserProfile[] = [];
+        const map = new Map<string, UserProfile>();
+
+        // Seed with local mirror users first
+        const mirrorUsers = getLocalUsersMirror();
+        mirrorUsers.forEach((u) => map.set(u.uid, u));
+
+        // Merge Firestore users
         snapshot.forEach((docSnap) => {
           const data = docSnap.data() as Partial<UserProfile>;
           const cleanName = data.displayName || data.name || (data.email ? data.email.split('@')[0] : 'Usuário');
-          list.push({
+          const profile: UserProfile = {
             uid: data.uid || docSnap.id,
             email: data.email || '',
             displayName: cleanName,
@@ -281,15 +331,27 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
             status: data.status || 'pending',
             createdAt: data.createdAt || new Date().toISOString(),
             updatedAt: data.updatedAt || new Date().toISOString(),
-          });
+          };
+          map.set(profile.uid, profile);
+          updateUserInLocalMirror(profile.uid, profile);
         });
 
-        // In-memory sort by createdAt descending
+        const list = Array.from(map.values());
         list.sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime());
+
+        const pendingCount = list.filter((u) => u.status === 'pending').length;
+        console.log(`[Bio Fácil Admin] Pending users found: ${pendingCount}`);
+
         setAllUsers(list);
       },
       (error) => {
-        console.error('Erro ao carregar lista de usuários para admin:', error);
+        console.error('[Bio Fácil Admin] Erro na consulta de usuários:', error);
+        // Fallback to local mirror so pending accounts never disappear
+        const fallbackUsers = getLocalUsersMirror();
+        fallbackUsers.sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime());
+        const pendingCount = fallbackUsers.filter((u) => u.status === 'pending').length;
+        console.log(`[Bio Fácil Admin] Pending users found: ${pendingCount}`);
+        setAllUsers(fallbackUsers);
       }
     );
 
@@ -333,10 +395,18 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
       createdAt: (template as any).createdAt || new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     };
-    // Persist to Firestore with merge: true to avoid deleting or corrupting existing data
-    await setDoc(docRef, newTemplateData, { merge: true });
-    // Also update in-memory full template cache
+
+    // 1. Local mirror first to protect data permanently
+    saveTemplateToLocalMirror(newTemplateData);
     fullTemplatesCache.current.set(template.id, newTemplateData);
+    setTemplates((prev) => [newTemplateData, ...prev.filter((t) => t.id !== template.id)]);
+
+    // 2. Persist to Firestore with merge: true
+    try {
+      await setDoc(docRef, newTemplateData, { merge: true });
+    } catch (err) {
+      console.warn('[Bio Fácil Data] Aviso ao persistir modelo no Firestore:', err);
+    }
   };
 
   const updateTemplate = async (id: string, data: Partial<BiositeTemplate>) => {
@@ -345,18 +415,34 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
       ...data,
       updatedAt: new Date().toISOString(),
     };
-    // Persist to Firestore with merge: true so ONLY modified fields change and the rest remains intact
-    await setDoc(docRef, updatePayload, { merge: true });
-    // Update cache
+
+    // 1. Local mirror update
+    updateTemplateInLocalMirror(id, updatePayload);
     const cached = fullTemplatesCache.current.get(id);
     if (cached) {
       fullTemplatesCache.current.set(id, { ...cached, ...updatePayload });
     }
+    setTemplates((prev) =>
+      prev.map((t) => (t.id === id ? { ...t, ...updatePayload } : t))
+    );
+
+    // 2. Persist to Firestore with merge: true
+    try {
+      await setDoc(docRef, updatePayload, { merge: true });
+    } catch (err) {
+      console.warn('[Bio Fácil Data] Aviso ao atualizar modelo no Firestore:', err);
+    }
   };
 
   const deleteTemplate = async (id: string) => {
-    await deleteDoc(doc(db, 'templates', id));
+    deleteTemplateFromLocalMirror(id);
     fullTemplatesCache.current.delete(id);
+    setTemplates((prev) => prev.filter((t) => t.id !== id));
+    try {
+      await deleteDoc(doc(db, 'templates', id));
+    } catch (err) {
+      console.warn('[Bio Fácil Data] Aviso ao excluir modelo do Firestore:', err);
+    }
   };
 
   const saveProject = async (project: Partial<UserProject> & { id: string; userId: string }) => {
@@ -387,24 +473,43 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
     role?: UserProfile['role']
   ) => {
     const userRef = doc(db, 'users', uid);
-    const updates: Partial<UserProfile> = {
+    const now = new Date().toISOString();
+    const updates: Partial<UserProfile> & Record<string, any> = {
       status,
-      updatedAt: new Date().toISOString(),
+      updatedAt: now,
     };
+
+    if (status === 'approved') updates.approvedAt = now;
+    if (status === 'rejected') updates.rejectedAt = now;
+    if (status === 'blocked') updates.blockedAt = now;
+
     if (role) {
       updates.role = role;
       if (role === 'admin') {
         await setDoc(
           doc(db, 'admins', uid),
-          { uid, assignedAt: new Date().toISOString() },
+          { uid, assignedAt: now },
           { merge: true }
-        );
+        ).catch(() => {});
       } else {
         await deleteDoc(doc(db, 'admins', uid)).catch(() => {});
       }
     }
-    // Use setDoc with merge: true for safe updates
-    await setDoc(userRef, updates, { merge: true });
+
+    // 1. Update local mirror immediately
+    updateUserInLocalMirror(uid, updates);
+
+    // 2. Update local state immediately so admin does not have to reload or wait
+    setAllUsers((prev) =>
+      prev.map((u) => (u.uid === uid ? { ...u, ...updates } : u))
+    );
+
+    // 3. Persist to Firestore with merge: true
+    try {
+      await setDoc(userRef, updates, { merge: true });
+    } catch (err) {
+      console.warn('[Bio Fácil Data] Aviso ao atualizar status do usuário no Firestore:', err);
+    }
   };
 
   return (

@@ -1,10 +1,9 @@
 import React, { useState } from 'react';
 import { useAuth } from '../context/AuthContext';
-import { GoogleIcon } from './Icons';
-import { Mail, Lock, User, ArrowRight, AlertCircle, CheckCircle2, ShieldCheck, KeyRound, Sparkles } from 'lucide-react';
+import { Mail, Lock, User, ArrowRight, AlertCircle, CheckCircle2, ShieldCheck, KeyRound } from 'lucide-react';
 
 export const AuthScreen: React.FC = () => {
-  const { loginWithEmail, registerWithEmail, loginWithGoogle, resetPassword } = useAuth();
+  const { loginWithEmail, registerWithEmail, resetPassword } = useAuth();
   const [tab, setTab] = useState<'login' | 'register' | 'forgot'>('login');
 
   const [name, setName] = useState('');
@@ -38,15 +37,13 @@ export const AuthScreen: React.FC = () => {
       try {
         await loginWithEmail(email.trim(), password);
       } catch (err: any) {
-        console.error('Erro no login:', err);
+        console.error('[Bio Fácil Auth] Erro no login:', err);
         if (
           err.code === 'auth/invalid-credential' ||
           err.code === 'auth/wrong-password' ||
           err.code === 'auth/user-not-found'
         ) {
           setError('E-mail ou senha incorretos.');
-        } else if (err.code === 'auth/operation-not-allowed') {
-          setError('O provedor de e-mail requer ativação no Firebase Auth. Você também pode entrar via Google!');
         } else if (err.code === 'auth/too-many-requests') {
           setError('Muitas tentativas sem sucesso. Tente novamente em alguns minutos.');
         } else {
@@ -77,14 +74,16 @@ export const AuthScreen: React.FC = () => {
       try {
         await registerWithEmail(name.trim(), email.trim(), password);
         setRegisteredPending(true);
+        setName('');
+        setEmail('');
+        setPassword('');
+        setConfirmPassword('');
       } catch (err: any) {
-        console.error('Erro no cadastro:', err);
+        console.error('[Bio Fácil Auth] Erro no cadastro:', err);
         if (err.code === 'auth/email-already-in-use') {
           setError('Este e-mail já está cadastrado. Faça login ou recupere sua senha.');
-        } else if (err.code === 'auth/operation-not-allowed') {
-          setError('O provedor de e-mail requer ativação no Firebase Auth. Você também pode entrar via Google!');
         } else {
-          setError(err.message || 'Erro ao realizar cadastro.');
+          setError('Não foi possível concluir seu cadastro. Tente novamente.');
         }
       } finally {
         setLoading(false);
@@ -100,26 +99,11 @@ export const AuthScreen: React.FC = () => {
         await resetPassword(email.trim());
         setSuccessMessage('E-mail de recuperação enviado com sucesso! Verifique sua caixa de entrada.');
       } catch (err: any) {
-        console.error('Erro ao redefinir senha:', err);
+        console.error('[Bio Fácil Auth] Erro ao redefinir senha:', err);
         setError(err.message || 'Erro ao solicitar recuperação de senha.');
       } finally {
         setLoading(false);
       }
-    }
-  };
-
-  const handleGoogleSignIn = async () => {
-    setError(null);
-    setLoading(true);
-    try {
-      await loginWithGoogle();
-    } catch (err: any) {
-      console.error('Erro login Google:', err);
-      if (err.code !== 'auth/popup-closed-by-user') {
-        setError(err.message || 'Não foi possível entrar com Google no momento.');
-      }
-    } finally {
-      setLoading(false);
     }
   };
 
@@ -389,31 +373,6 @@ export const AuthScreen: React.FC = () => {
                   )}
                 </button>
               </form>
-
-              {/* Social Login Separator (only for login or register) */}
-              {tab !== 'forgot' && (
-                <>
-                  <div className="relative my-5">
-                    <div className="absolute inset-0 flex items-center">
-                      <div className="w-full border-t border-purple-500/20" />
-                    </div>
-                    <div className="relative flex justify-center text-[10px] uppercase font-mono">
-                      <span className="bg-[#0e0d18] px-3 text-gray-500">ou continue com</span>
-                    </div>
-                  </div>
-
-                  {/* Google Login Button */}
-                  <button
-                    type="button"
-                    onClick={handleGoogleSignIn}
-                    disabled={loading}
-                    className="w-full py-2.5 bg-[#121020] hover:bg-[#1a172e] border border-purple-500/30 text-white font-semibold rounded-xl text-xs flex items-center justify-center gap-2.5 shadow-sm transition-all"
-                  >
-                    <GoogleIcon size={16} />
-                    <span>Entrar com o Google</span>
-                  </button>
-                </>
-              )}
             </>
           )}
 

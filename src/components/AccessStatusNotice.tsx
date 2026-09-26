@@ -91,16 +91,16 @@ export const AccessStatusNotice: React.FC = () => {
 
         {/* Action Buttons */}
         <div className="flex flex-col sm:flex-row items-center gap-3 pt-2">
-          {/* Sair / Desconectar */}
+          {/* Sair */}
           <button
             onClick={() => logout()}
             className="w-full sm:flex-1 py-3 px-4 bg-[#181628] hover:bg-[#25223e] border border-white/10 hover:border-purple-500/40 text-gray-200 font-semibold rounded-xl text-xs flex items-center justify-center gap-2 transition-all shadow-sm"
           >
             <LogOut size={14} className="text-gray-400" />
-            <span>SAIR / DESCONECTAR</span>
+            <span>SAIR</span>
           </button>
 
-          {/* Verificar Status */}
+          {/* Verificar Novamente */}
           {isPending && (
             <button
               onClick={handleCheckStatus}
@@ -108,7 +108,7 @@ export const AccessStatusNotice: React.FC = () => {
               className="w-full sm:flex-1 py-3 px-4 bg-purple-600 hover:bg-purple-500 disabled:opacity-50 text-white font-semibold rounded-xl text-xs flex items-center justify-center gap-2 shadow-[0_0_15px_rgba(147,51,234,0.35)] transition-all"
             >
               <RefreshCw size={14} className={checking ? 'animate-spin' : ''} />
-              <span>{checking ? 'VERIFICANDO...' : 'VERIFICAR STATUS'}</span>
+              <span>{checking ? 'VERIFICANDO...' : 'VERIFICAR NOVAMENTE'}</span>
             </button>
           )}
         </div>

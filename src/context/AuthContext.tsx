@@ -7,8 +7,6 @@ import {
   createUserWithEmailAndPassword,
   signOut,
   sendPasswordResetEmail,
-  signInWithPopup,
-  GoogleAuthProvider,
   doc,
   getDoc,
   setDoc,
@@ -17,6 +15,11 @@ import {
   type FirebaseUser
 } from '../firebase';
 import { UserProfile, UserRole, UserStatus } from '../types';
+import {
+  saveUserToLocalMirror,
+  getLocalUsersMirror,
+  updateUserInLocalMirror
+} from '../utils/persistence';
 
 interface AuthContextType {
   currentUser: FirebaseUser | null;
@@ -26,7 +29,6 @@ interface AuthContextType {
   isApproved: boolean;
   loginWithEmail: (e: string, p: string) => Promise<void>;
   registerWithEmail: (name: string, email: string, pass: string) => Promise<void>;
-  loginWithGoogle: () => Promise<void>;
   resetPassword: (email: string) => Promise<void>;
   logout: () => Promise<void>;
   refreshProfile: () => Promise<void>;
@@ -34,7 +36,7 @@ interface AuthContextType {
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
-// Owner / Superadmin bootstrap emails from environment
+// Owner / Superadmin bootstrap emails
 const ADMIN_BOOTSTRAP_EMAILS = [
   'jeanncarllostk00@gmail.com',
   'jeannmkt2@gmail.com',
@@ -56,15 +58,20 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     const isSuperAdmin = isBootstrapAdminEmail(user.email);
     const userRef = doc(db, 'users', user.uid);
     const cleanEmail = (user.email || '').trim().toLowerCase();
-    
+
+    // Check local mirror first as an immediate safety cache
+    const mirrorUsers = getLocalUsersMirror();
+    const mirrorMatch = mirrorUsers.find((u) => u.uid === user.uid || (u.email && u.email.toLowerCase() === cleanEmail));
+
     try {
       const snapPromise = getDoc(userRef);
-      const timeoutPromise = new Promise<null>((resolve) => setTimeout(() => resolve(null), 3500));
+      const timeoutPromise = new Promise<null>((resolve) => setTimeout(() => resolve(null), 3000));
       const snap = await Promise.race([snapPromise, timeoutPromise]);
 
       if (snap && snap.exists()) {
         const data = snap.data() as UserProfile;
-        // If superadmin email, ensure admin role and approved status
+        
+        // If superadmin, ensure admin role and approved status
         if (isSuperAdmin && (data.role !== 'admin' || data.status !== 'approved')) {
           const updated: Partial<UserProfile> = {
             role: 'admin',
@@ -72,20 +79,24 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
             updatedAt: new Date().toISOString(),
           };
           await updateDoc(userRef, updated).catch(() => {});
-          // Also register in admins collection
           await setDoc(doc(db, 'admins', user.uid), {
             uid: user.uid,
             email: cleanEmail,
             assignedAt: new Date().toISOString(),
           }, { merge: true }).catch(() => {});
-          return { ...data, ...updated };
+
+          const fullProfile = { ...data, ...updated };
+          saveUserToLocalMirror(fullProfile);
+          return fullProfile;
         }
+
+        saveUserToLocalMirror(data);
         return data;
       } else if (snap && !snap.exists()) {
-        // Create new profile
+        // Create new profile if not found in Firestore
         const newRole: UserRole = isSuperAdmin ? 'admin' : 'user';
         const newStatus: UserStatus = isSuperAdmin ? 'approved' : 'pending';
-        const displayName = user.displayName?.trim() || (user.email ? user.email.split('@')[0] : 'Usuário');
+        const displayName = mirrorMatch?.displayName || user.displayName?.trim() || (user.email ? user.email.split('@')[0] : 'Usuário');
 
         const newProfile: UserProfile = {
           uid: user.uid,
@@ -94,7 +105,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           name: displayName,
           role: newRole,
           status: newStatus,
-          createdAt: new Date().toISOString(),
+          createdAt: mirrorMatch?.createdAt || new Date().toISOString(),
           updatedAt: new Date().toISOString(),
         };
 
@@ -108,15 +119,25 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           }, { merge: true }).catch(() => {});
         }
 
+        saveUserToLocalMirror(newProfile);
         return newProfile;
       }
     } catch (err) {
-      console.warn('Aviso ao sincronizar perfil do Firestore, utilizando perfil em memória:', err);
+      console.warn('[Bio Fácil Auth] Aviso ao ler perfil do Firestore:', err);
     }
 
-    // Defensive fallback profile in case of network timeout
+    // Defensive fallback from mirror or memory
+    if (mirrorMatch) {
+      if (isSuperAdmin && (mirrorMatch.role !== 'admin' || mirrorMatch.status !== 'approved')) {
+        mirrorMatch.role = 'admin';
+        mirrorMatch.status = 'approved';
+        saveUserToLocalMirror(mirrorMatch);
+      }
+      return mirrorMatch;
+    }
+
     const fallbackName = user.displayName?.trim() || (user.email ? user.email.split('@')[0] : 'Usuário');
-    return {
+    const fallbackProfile: UserProfile = {
       uid: user.uid,
       email: cleanEmail,
       displayName: fallbackName,
@@ -126,6 +147,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     };
+    saveUserToLocalMirror(fallbackProfile);
+    return fallbackProfile;
   };
 
   const refreshProfile = async () => {
@@ -136,7 +159,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   };
 
   useEffect(() => {
-    // Safety timer to prevent any infinite black screen during auth resolution
     const safetyTimer = setTimeout(() => {
       setLoading(false);
     }, 2500);
@@ -159,18 +181,19 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           // Listen to real-time status/role changes (e.g. when admin approves the user)
           userDocUnsub = onSnapshot(
             doc(db, 'users', user.uid),
-            (docSnap: any) => {
+            (docSnap) => {
               if (docSnap.exists()) {
                 const data = docSnap.data() as UserProfile;
                 setUserProfile(data);
+                saveUserToLocalMirror(data);
               }
             },
-            (err: any) => {
-              console.warn('Erro ao escutar atualizações do perfil:', err);
+            (err) => {
+              console.warn('[Bio Fácil Auth] Aviso no listener de perfil:', err);
             }
           );
         } catch (err) {
-          console.error('Erro ao obter perfil do usuário:', err);
+          console.error('[Bio Fácil Auth] Erro ao obter perfil do usuário:', err);
         }
       } else {
         setUserProfile(null);
@@ -192,8 +215,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     try {
       await signInWithEmailAndPassword(auth, cleanEmail, pass);
     } catch (err: any) {
-      // If this is the bootstrap admin email and user does not exist in Firebase Auth yet,
-      // automatically create and provision the admin account on first login!
+      // If this is the bootstrap admin email and account does not exist in Auth yet, provision on first login
       if (
         isBootstrapAdminEmail(cleanEmail) &&
         (err.code === 'auth/user-not-found' ||
@@ -219,11 +241,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
               email: cleanEmail,
               assignedAt: new Date().toISOString(),
             }, { merge: true });
+            saveUserToLocalMirror(adminProfile);
             setUserProfile(adminProfile);
             return;
           }
         } catch {
-          // If creation fails (e.g. user already exists but password incorrect), throw the original login error
           throw err;
         }
       }
@@ -234,40 +256,53 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const registerWithEmail = async (name: string, email: string, pass: string) => {
     const cleanEmail = email.trim().toLowerCase();
     const cleanName = name.trim();
+
+    // 1. Create user in Firebase Authentication
     const cred = await createUserWithEmailAndPassword(auth, cleanEmail, pass);
-    if (cred.user) {
-      const isSuperAdmin = isBootstrapAdminEmail(cleanEmail);
-      const userRef = doc(db, 'users', cred.user.uid);
-      const newProfile: UserProfile = {
-        uid: cred.user.uid,
-        email: cleanEmail,
-        displayName: cleanName,
-        name: cleanName,
-        role: isSuperAdmin ? 'admin' : 'user',
-        status: isSuperAdmin ? 'approved' : 'pending',
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-      };
-      
-      // Save to users collection with merge: true so it is safely written
+    const uid = cred.user.uid;
+
+    console.log(`[Bio Fácil Auth] Account UID: ${uid}`);
+    console.log(`[Bio Fácil Auth] Profile collection: users`);
+
+    const isSuperAdmin = isBootstrapAdminEmail(cleanEmail);
+    const userRef = doc(db, 'users', uid);
+
+    const newProfile: UserProfile = {
+      uid,
+      email: cleanEmail,
+      displayName: cleanName,
+      name: cleanName,
+      role: isSuperAdmin ? 'admin' : 'user',
+      status: isSuperAdmin ? 'approved' : 'pending',
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+
+    // 2. Persist to Firestore with merge: true
+    try {
       await setDoc(userRef, newProfile, { merge: true });
-      
+
       if (isSuperAdmin) {
-        await setDoc(doc(db, 'admins', cred.user.uid), {
-          uid: cred.user.uid,
+        await setDoc(doc(db, 'admins', uid), {
+          uid,
           email: cleanEmail,
           assignedAt: new Date().toISOString(),
-        }, { merge: true });
+        }, { merge: true }).catch(() => {});
       }
-      
-      setUserProfile(newProfile);
-    }
-  };
 
-  const loginWithGoogle = async () => {
-    const provider = new GoogleAuthProvider();
-    provider.setCustomParameters({ prompt: 'select_account' });
-    await signInWithPopup(auth, provider);
+      console.log(`[Bio Fácil Auth] Profile created: true`);
+      console.log(`[Bio Fácil Auth] Profile status: ${newProfile.status}`);
+    } catch (firestoreErr) {
+      console.error('[Bio Fácil Auth] Erro ao gravar perfil no Firestore:', firestoreErr);
+      console.log(`[Bio Fácil Auth] Profile created: false`);
+      // Still mirror locally so admin has record and account doesn't vanish
+      saveUserToLocalMirror(newProfile);
+      throw new Error('Não foi possível concluir seu cadastro. Tente novamente.');
+    }
+
+    // 3. Mirror locally for resilience
+    saveUserToLocalMirror(newProfile);
+    setUserProfile(newProfile);
   };
 
   const resetPassword = async (email: string) => {
@@ -292,7 +327,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         isApproved,
         loginWithEmail,
         registerWithEmail,
-        loginWithGoogle,
         resetPassword,
         logout,
         refreshProfile,
