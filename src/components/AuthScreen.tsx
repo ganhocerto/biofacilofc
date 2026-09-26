@@ -1,9 +1,10 @@
 import React, { useState } from 'react';
 import { useAuth } from '../context/AuthContext';
-import { Mail, Lock, User, ArrowRight, AlertCircle, CheckCircle2, ShieldCheck, KeyRound } from 'lucide-react';
+import { GoogleIcon } from './Icons';
+import { Mail, Lock, User, ArrowRight, AlertCircle, CheckCircle2, ShieldCheck, KeyRound, Sparkles } from 'lucide-react';
 
 export const AuthScreen: React.FC = () => {
-  const { loginWithEmail, registerWithEmail, resetPassword } = useAuth();
+  const { loginWithEmail, registerWithEmail, loginWithGoogle, resetPassword } = useAuth();
   const [tab, setTab] = useState<'login' | 'register' | 'forgot'>('login');
 
   const [name, setName] = useState('');
@@ -37,13 +38,15 @@ export const AuthScreen: React.FC = () => {
       try {
         await loginWithEmail(email.trim(), password);
       } catch (err: any) {
-        console.error('[Bio Fácil Auth] Erro no login:', err);
+        console.error('Erro no login:', err);
         if (
           err.code === 'auth/invalid-credential' ||
           err.code === 'auth/wrong-password' ||
           err.code === 'auth/user-not-found'
         ) {
           setError('E-mail ou senha incorretos.');
+        } else if (err.code === 'auth/operation-not-allowed') {
+          setError('O provedor de e-mail requer ativação no Firebase Auth. Você também pode entrar via Google!');
         } else if (err.code === 'auth/too-many-requests') {
           setError('Muitas tentativas sem sucesso. Tente novamente em alguns minutos.');
         } else {
@@ -74,16 +77,14 @@ export const AuthScreen: React.FC = () => {
       try {
         await registerWithEmail(name.trim(), email.trim(), password);
         setRegisteredPending(true);
-        setName('');
-        setEmail('');
-        setPassword('');
-        setConfirmPassword('');
       } catch (err: any) {
-        console.error('[Bio Fácil Auth] Erro no cadastro:', err);
+        console.error('Erro no cadastro:', err);
         if (err.code === 'auth/email-already-in-use') {
           setError('Este e-mail já está cadastrado. Faça login ou recupere sua senha.');
+        } else if (err.code === 'auth/operation-not-allowed') {
+          setError('O provedor de e-mail requer ativação no Firebase Auth. Você também pode entrar via Google!');
         } else {
-          setError('Não foi possível concluir seu cadastro. Tente novamente.');
+          setError(err.message || 'Erro ao realizar cadastro.');
         }
       } finally {
         setLoading(false);
@@ -99,11 +100,26 @@ export const AuthScreen: React.FC = () => {
         await resetPassword(email.trim());
         setSuccessMessage('E-mail de recuperação enviado com sucesso! Verifique sua caixa de entrada.');
       } catch (err: any) {
-        console.error('[Bio Fácil Auth] Erro ao redefinir senha:', err);
+        console.error('Erro ao redefinir senha:', err);
         setError(err.message || 'Erro ao solicitar recuperação de senha.');
       } finally {
         setLoading(false);
       }
+    }
+  };
+
+  const handleGoogleSignIn = async () => {
+    setError(null);
+    setLoading(true);
+    try {
+      await loginWithGoogle();
+    } catch (err: any) {
+      console.error('Erro login Google:', err);
+      if (err.code !== 'auth/popup-closed-by-user') {
+        setError(err.message || 'Não foi possível entrar com Google no momento.');
+      }
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -150,18 +166,13 @@ export const AuthScreen: React.FC = () => {
                 <CheckCircle2 size={32} />
               </div>
 
-              <h2 className="text-2xl font-display font-black text-white tracking-tight">
-                CONTA EM ANÁLISE
+              <h2 className="text-lg font-display font-bold text-white">
+                Cadastro Realizado!
               </h2>
 
-              <div className="text-xs text-gray-300 leading-relaxed max-w-sm mx-auto bg-[#131122] p-4 rounded-2xl border border-purple-500/20 text-center space-y-1.5">
-                <p className="font-semibold text-amber-300">
-                  Seu cadastro foi realizado com sucesso.
-                </p>
-                <p className="text-gray-400">
-                  Aguarde a aprovação do administrador para acessar o BIO FÁCIL.
-                </p>
-              </div>
+              <p className="text-xs text-gray-300 leading-relaxed max-w-sm mx-auto">
+                Seu cadastro foi realizado com sucesso. Aguardando aprovação do administrador para liberar seu acesso à plataforma.
+              </p>
 
               <button
                 onClick={() => {
@@ -373,6 +384,31 @@ export const AuthScreen: React.FC = () => {
                   )}
                 </button>
               </form>
+
+              {/* Social Login Separator (only for login or register) */}
+              {tab !== 'forgot' && (
+                <>
+                  <div className="relative my-5">
+                    <div className="absolute inset-0 flex items-center">
+                      <div className="w-full border-t border-purple-500/20" />
+                    </div>
+                    <div className="relative flex justify-center text-[10px] uppercase font-mono">
+                      <span className="bg-[#0e0d18] px-3 text-gray-500">ou continue com</span>
+                    </div>
+                  </div>
+
+                  {/* Google Login Button */}
+                  <button
+                    type="button"
+                    onClick={handleGoogleSignIn}
+                    disabled={loading}
+                    className="w-full py-2.5 bg-[#121020] hover:bg-[#1a172e] border border-purple-500/30 text-white font-semibold rounded-xl text-xs flex items-center justify-center gap-2.5 shadow-sm transition-all"
+                  >
+                    <GoogleIcon size={16} />
+                    <span>Entrar com o Google</span>
+                  </button>
+                </>
+              )}
             </>
           )}
 

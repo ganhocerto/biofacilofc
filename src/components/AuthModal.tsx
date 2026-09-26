@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { useAuth } from '../context/AuthContext';
+import { GoogleIcon } from './Icons';
 import { X, Lock, Mail, User, AlertCircle, CheckCircle2, ArrowRight, ShieldCheck } from 'lucide-react';
 
 interface AuthModalProps {
@@ -13,7 +14,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
   onClose,
   initialMode = 'login',
 }) => {
-  const { loginWithEmail, registerWithEmail, resetPassword } = useAuth();
+  const { loginWithEmail, registerWithEmail, loginWithGoogle, resetPassword } = useAuth();
   const [mode, setMode] = useState<'login' | 'register' | 'forgot'>(initialMode);
   
   const [name, setName] = useState('');
@@ -58,11 +59,13 @@ export const AuthModal: React.FC<AuthModalProps> = ({
         await registerWithEmail(name.trim(), email.trim(), password);
         setRegisteredPending(true);
       } catch (err: any) {
-        console.error('[Bio Fácil Auth] Erro no cadastro modal:', err);
+        console.error('Erro no cadastro:', err);
         if (err.code === 'auth/email-already-in-use') {
           setError('Este e-mail já está cadastrado. Faça login ou recupere sua senha.');
+        } else if (err.code === 'auth/operation-not-allowed') {
+          setError('O provedor de e-mail e senha requer ativação no Firebase Auth. Você também pode entrar via Google!');
         } else {
-          setError('Não foi possível concluir seu cadastro. Tente novamente.');
+          setError(err.message || 'Erro ao realizar cadastro.');
         }
       } finally {
         setLoading(false);
@@ -73,9 +76,11 @@ export const AuthModal: React.FC<AuthModalProps> = ({
         await loginWithEmail(email.trim(), password);
         onClose();
       } catch (err: any) {
-        console.error('[Bio Fácil Auth] Erro no login modal:', err);
+        console.error('Erro no login:', err);
         if (err.code === 'auth/invalid-credential' || err.code === 'auth/wrong-password' || err.code === 'auth/user-not-found') {
           setError('E-mail ou senha incorretos.');
+        } else if (err.code === 'auth/operation-not-allowed') {
+          setError('O provedor de e-mail requer ativação no Firebase Auth. Você também pode entrar com o Google!');
         } else {
           setError(err.message || 'Erro ao efetuar login.');
         }
@@ -99,6 +104,22 @@ export const AuthModal: React.FC<AuthModalProps> = ({
     }
   };
 
+  const handleGoogleSubmit = async () => {
+    setError(null);
+    setLoading(true);
+    try {
+      await loginWithGoogle();
+      onClose();
+    } catch (err: any) {
+      console.error('Erro Google Auth:', err);
+      if (err.code !== 'auth/popup-closed-by-user') {
+        setError(err.message || 'Não foi possível autenticar com o Google.');
+      }
+    } finally {
+      setLoading(false);
+    }
+  };
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/85 backdrop-blur-md overflow-y-auto">
       {/* Central 3D Card */}
@@ -118,20 +139,16 @@ export const AuthModal: React.FC<AuthModalProps> = ({
 
         {registeredPending ? (
           <div className="text-center py-6 space-y-4">
-            <div className="w-16 h-16 mx-auto rounded-2xl bg-amber-500/15 border border-amber-500/30 flex items-center justify-center text-amber-400 shadow-[0_0_20px_rgba(245,158,11,0.2)]">
+            <div className="w-16 h-16 mx-auto rounded-2xl bg-amber-500/10 border border-amber-500/30 flex items-center justify-center text-amber-400 shadow-[0_0_20px_rgba(245,158,11,0.2)]">
               <CheckCircle2 size={32} />
             </div>
-            <h3 className="text-xl font-display font-bold text-white tracking-tight">
-              CONTA EM ANÁLISE
+            <h3 className="text-xl font-display font-bold text-white">
+              Cadastro Realizado!
             </h3>
-            <div className="text-xs text-gray-300 leading-relaxed bg-[#131122] p-4 rounded-2xl border border-purple-500/20 text-center space-y-1.5">
-              <p className="font-semibold text-amber-300">
-                Seu cadastro foi realizado com sucesso.
-              </p>
-              <p className="text-gray-400">
-                Aguarde a aprovação do administrador para acessar o BIO FÁCIL.
-              </p>
-            </div>
+            <p className="text-xs text-gray-300 leading-relaxed bg-[#131122] p-4 rounded-2xl border border-purple-500/20 text-left">
+              Sua conta foi criada com sucesso e está <strong className="text-amber-300">aguardando aprovação do administrador</strong>.
+              Você receberá a liberação para começar a criar e personalizar seus biosites.
+            </p>
             <button
               onClick={() => {
                 setRegisteredPending(false);
@@ -165,7 +182,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
               </h2>
 
               <p className="text-xs text-gray-400 mt-1">
-                Crie biosites que impressionam.
+                "Crie biosites que impressionam."
               </p>
             </div>
 
@@ -356,6 +373,30 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                   Voltar para o Login
                 </button>
               </div>
+            )}
+
+            {/* Google Divider */}
+            {mode !== 'forgot' && (
+              <>
+                <div className="relative my-4">
+                  <div className="absolute inset-0 flex items-center">
+                    <div className="w-full border-t border-white/5"></div>
+                  </div>
+                  <div className="relative flex justify-center text-[10px] uppercase font-mono tracking-wider">
+                    <span className="bg-[#0b0a14] px-2 text-gray-500">ou continue com</span>
+                  </div>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={handleGoogleSubmit}
+                  disabled={loading}
+                  className="w-full py-2.5 px-4 bg-[#141224] hover:bg-[#1d1a33] border border-purple-500/25 rounded-xl text-xs font-semibold text-gray-200 flex items-center justify-center gap-2.5 transition-all shadow-sm"
+                >
+                  <GoogleIcon size={16} />
+                  <span>Google</span>
+                </button>
+              </>
             )}
 
             {/* Discrete Security Footer */}

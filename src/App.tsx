@@ -11,12 +11,11 @@ import { MyProjectsList } from './components/MyProjectsList';
 import { AdminDashboard } from './components/AdminDashboard';
 import { AuthModal } from './components/AuthModal';
 import { AccessStatusNotice } from './components/AccessStatusNotice';
-import { ErrorBoundary } from './components/ErrorBoundary';
 import { Niche, BiositeTemplate, UserProject } from './types';
 
 const MainAppContent: React.FC = () => {
   const { currentUser, userProfile, isAdmin, isApproved, loading } = useAuth();
-  const { niches, templates, loadTemplateFull } = useData();
+  const { niches, templates } = useData();
 
   // Navigation State
   const [currentTab, setCurrentTab] = useState<'catalog' | 'my-projects' | 'admin'>('catalog');
@@ -43,7 +42,7 @@ const MainAppContent: React.FC = () => {
   }, [isAdmin]);
 
   // Handle Customize trigger (checks auth and status)
-  const handleStartCustomizing = async (template: BiositeTemplate) => {
+  const handleStartCustomizing = (template: BiositeTemplate) => {
     if (!currentUser) {
       setIsAuthModalOpen(true);
       return;
@@ -51,30 +50,14 @@ const MainAppContent: React.FC = () => {
     if (!isApproved) {
       return; // AccessStatusNotice handles pending status
     }
-    let target = template;
-    if (!template.htmlContent) {
-      try {
-        target = await loadTemplateFull(template.id);
-      } catch (err) {
-        console.warn('Erro ao carregar template completo:', err);
-      }
-    }
     setEditingProject(null);
-    setCustomizingTemplate(target);
+    setCustomizingTemplate(template);
   };
 
   // Handle Edit saved project
-  const handleEditSavedProject = async (project: UserProject, template: BiositeTemplate) => {
-    let target = template;
-    if (!template.htmlContent) {
-      try {
-        target = await loadTemplateFull(template.id);
-      } catch (err) {
-        console.warn('Erro ao carregar template completo:', err);
-      }
-    }
-    setEditingProject({ project, template: target });
-    setCustomizingTemplate(target);
+  const handleEditSavedProject = (project: UserProject, template: BiositeTemplate) => {
+    setEditingProject({ project, template });
+    setCustomizingTemplate(template);
   };
 
   // Handle Preview saved project
@@ -250,14 +233,10 @@ const MainAppContent: React.FC = () => {
 
 export default function App() {
   return (
-    <ErrorBoundary fallbackTitle="Falha na inicialização do BIO FÁCIL">
-      <AuthProvider>
-        <DataProvider>
-          <ErrorBoundary fallbackTitle="Instabilidade na interface do BIO FÁCIL">
-            <MainAppContent />
-          </ErrorBoundary>
-        </DataProvider>
-      </AuthProvider>
-    </ErrorBoundary>
+    <AuthProvider>
+      <DataProvider>
+        <MainAppContent />
+      </DataProvider>
+    </AuthProvider>
   );
 }

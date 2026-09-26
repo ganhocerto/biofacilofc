@@ -34,23 +34,9 @@ service cloud.firestore {
 
     function isAdmin() {
       return isSignedIn() && (
-        (request.auth.token.email != null && (
-          request.auth.token.email.lower() == 'jeanncarllostk00@gmail.com' ||
-          request.auth.token.email.lower() == 'jeannmkt2@gmail.com'
-        )) ||
         exists(/databases/$(database)/documents/admins/$(request.auth.uid)) ||
-        (exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
-         get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin')
-      );
-    }
-
-    function isApprovedUser() {
-      return isSignedIn() && (
-        isAdmin() ||
-        (
-          exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
-          get(/databases/$(database)/documents/users/$(request.auth.uid)).data.status == 'approved'
-        )
+        (request.auth.token.email == 'jeanncarllostk00@gmail.com') ||
+        (request.auth.token.email == 'jeannmkt2@gmail.com')
       );
     }
 
@@ -70,9 +56,9 @@ service cloud.firestore {
         isAdmin() ||
         (
           isOwner(userId) &&
-          // Users cannot self-elevate to admin or self-approve status
-          (incoming().role == 'user' || incoming().role == existing().role) &&
-          (incoming().status == 'pending' || incoming().status == existing().status)
+          incoming().role == existing().role &&
+          incoming().status == existing().status &&
+          incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'updatedAt'])
         )
       );
 
@@ -108,19 +94,19 @@ service cloud.firestore {
     // PROJECTS COLLECTION
     // ==========================================
     match /projects/{projectId} {
-      allow get: if (isApprovedUser() && resource.data.userId == request.auth.uid) || isAdmin();
-      allow list: if (isApprovedUser() && resource.data.userId == request.auth.uid) || isAdmin();
+      allow get: if (isSignedIn() && resource.data.userId == request.auth.uid) || isAdmin();
+      allow list: if (isSignedIn() && resource.data.userId == request.auth.uid) || isAdmin();
 
-      allow create: if isApprovedUser() && isValidId(projectId) && (
+      allow create: if isSignedIn() && isValidId(projectId) && (
         incoming().userId == request.auth.uid || isAdmin()
       );
 
-      allow update: if isApprovedUser() && (
+      allow update: if isSignedIn() && (
         (existing().userId == request.auth.uid && incoming().userId == existing().userId) ||
         isAdmin()
       );
 
-      allow delete: if isApprovedUser() && (
+      allow delete: if isSignedIn() && (
         existing().userId == request.auth.uid ||
         isAdmin()
       );
