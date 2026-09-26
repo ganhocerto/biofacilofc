@@ -1,7 +1,8 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { Niche, BiositeTemplate } from '../types';
-import { ArrowLeft, Eye, Palette, Sparkles, Layers, Clock } from 'lucide-react';
+import { ArrowLeft, Eye, Palette, Layers, Clock, ImageOff, Loader2 } from 'lucide-react';
 import { NicheIconMap } from './Icons';
+import { useData } from '../context/DataContext';
 
 interface NicheTemplatesViewProps {
   niche: Niche;
@@ -18,10 +19,36 @@ export const NicheTemplatesView: React.FC<NicheTemplatesViewProps> = ({
   onPreviewTemplate,
   onCustomizeTemplate,
 }) => {
+  const { loadTemplateFull } = useData();
   const IconComp = NicheIconMap[niche.icon] || Layers;
   const filteredTemplates = templates.filter(
     (t) => t.nicheId === niche.id && t.status === 'published'
   );
+
+  const [loadingTemplateId, setLoadingTemplateId] = useState<string | null>(null);
+  const [failedImages, setFailedImages] = useState<Record<string, boolean>>({});
+
+  const handleAction = async (template: BiositeTemplate, action: 'preview' | 'customize') => {
+    try {
+      setLoadingTemplateId(template.id);
+      const fullTemplate = await loadTemplateFull(template.id);
+      if (action === 'preview') {
+        onPreviewTemplate(fullTemplate);
+      } else {
+        onCustomizeTemplate(fullTemplate);
+      }
+    } catch (err) {
+      console.error('Erro ao carregar modelo completo:', err);
+      // Fallback with provided template
+      if (action === 'preview') {
+        onPreviewTemplate(template);
+      } else {
+        onCustomizeTemplate(template);
+      }
+    } finally {
+      setLoadingTemplateId(null);
+    }
+  };
 
   return (
     <section className="w-full max-w-6xl mx-auto px-4 sm:px-6 py-6 sm:py-8">
@@ -85,62 +112,95 @@ export const NicheTemplatesView: React.FC<NicheTemplatesViewProps> = ({
         </div>
       ) : (
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5">
-          {filteredTemplates.map((template) => (
-            <div
-              key={template.id}
-              className="group bg-[#0e0d1a] border border-purple-500/20 hover:border-purple-400/40 rounded-2xl overflow-hidden transition-all duration-200 hover:-translate-y-1 hover:shadow-[0_12px_30px_-8px_rgba(147,51,234,0.35)] flex flex-col justify-between"
-            >
-              {/* Cover Preview */}
-              <div>
-                <div className="relative aspect-[16/10] bg-[#0c0b14] overflow-hidden">
-                  <img
-                    src={template.coverImage}
-                    alt={template.name}
-                    referrerPolicy="no-referrer"
-                    className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
-                  />
-                  <div className="absolute inset-0 bg-gradient-to-t from-[#0e0d1a] via-transparent to-black/30" />
-                  
-                  {/* Version tag */}
-                  <span className="absolute top-2.5 right-2.5 text-[9px] font-mono font-bold text-purple-300 bg-black/70 backdrop-blur-md px-2 py-0.5 rounded-md border border-white/10">
-                    v{template.version}.0
-                  </span>
+          {filteredTemplates.map((template) => {
+            const isImageFailed = failedImages[template.id];
+            const isLoadingThis = loadingTemplateId === template.id;
+
+            return (
+              <div
+                key={template.id}
+                className="group bg-[#0e0d1a] border border-purple-500/20 hover:border-purple-400/40 rounded-2xl overflow-hidden transition-all duration-200 hover:-translate-y-1 hover:shadow-[0_12px_30px_-8px_rgba(147,51,234,0.35)] flex flex-col justify-between"
+              >
+                {/* Cover Preview (Square 1:1, object-fit: cover) */}
+                <div>
+                  <div className="relative aspect-square w-full bg-[#0c0b14] overflow-hidden">
+                    {template.coverImage && !isImageFailed ? (
+                      <img
+                        src={template.coverImage}
+                        alt={template.name}
+                        loading="lazy"
+                        decoding="async"
+                        referrerPolicy="no-referrer"
+                        onError={() => setFailedImages((prev) => ({ ...prev, [template.id]: true }))}
+                        className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
+                        style={{ aspectRatio: '1 / 1', objectFit: 'cover' }}
+                      />
+                    ) : (
+                      <div className="w-full h-full flex flex-col items-center justify-center p-6 text-center bg-gradient-to-br from-[#121024] to-[#080711]">
+                        <div className="w-12 h-12 rounded-2xl bg-purple-900/30 border border-purple-500/30 flex items-center justify-center text-purple-400 mb-2">
+                          <ImageOff size={22} />
+                        </div>
+                        <span className="font-display font-bold text-xs text-white uppercase tracking-tight">
+                          {template.name}
+                        </span>
+                        <span className="text-[10px] text-purple-300/60 font-mono mt-0.5">
+                          {template.nicheName}
+                        </span>
+                      </div>
+                    )}
+                    <div className="absolute inset-0 bg-gradient-to-t from-[#0e0d1a] via-transparent to-black/20 pointer-events-none" />
+                    
+                    {/* Version tag */}
+                    <span className="absolute top-2.5 right-2.5 text-[9px] font-mono font-bold text-purple-300 bg-black/70 backdrop-blur-md px-2 py-0.5 rounded-md border border-white/10 pointer-events-none">
+                      v{template.version || 1}.0
+                    </span>
+                  </div>
+
+                  {/* Content */}
+                  <div className="p-4">
+                    <h3 className="font-display font-bold text-sm sm:text-base text-white group-hover:text-purple-200 transition-colors line-clamp-1 mb-1">
+                      {template.name}
+                    </h3>
+
+                    <p className="text-xs text-gray-400 line-clamp-2 leading-relaxed">
+                      {template.description}
+                    </p>
+                  </div>
                 </div>
 
-                {/* Content */}
-                <div className="p-4">
-                  <h3 className="font-display font-bold text-sm sm:text-base text-white group-hover:text-purple-200 transition-colors line-clamp-1 mb-1">
-                    {template.name}
-                  </h3>
+                {/* Actions: VISUALIZAR | PERSONALIZAR */}
+                <div className="p-4 pt-0">
+                  <div className="grid grid-cols-2 gap-2 pt-3 border-t border-white/5">
+                    <button
+                      onClick={() => handleAction(template, 'preview')}
+                      disabled={isLoadingThis}
+                      className="py-2 px-3 bg-[#161427] hover:bg-[#201d38] border border-purple-500/25 text-gray-200 hover:text-white rounded-xl text-xs font-semibold flex items-center justify-center gap-1.5 transition-all disabled:opacity-50"
+                    >
+                      {isLoadingThis ? (
+                        <Loader2 size={13} className="text-purple-400 animate-spin" />
+                      ) : (
+                        <Eye size={13} className="text-purple-400" />
+                      )}
+                      <span>{isLoadingThis ? 'CARREGANDO...' : 'VISUALIZAR'}</span>
+                    </button>
 
-                  <p className="text-xs text-gray-400 line-clamp-2 leading-relaxed">
-                    {template.description}
-                  </p>
+                    <button
+                      onClick={() => handleAction(template, 'customize')}
+                      disabled={isLoadingThis}
+                      className="py-2 px-3 bg-gradient-to-r from-purple-600 to-violet-600 hover:from-purple-500 hover:to-violet-500 text-white rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 shadow-[0_2px_12px_rgba(147,51,234,0.4)] active:scale-95 transition-all disabled:opacity-50"
+                    >
+                      {isLoadingThis ? (
+                        <Loader2 size={13} className="animate-spin" />
+                      ) : (
+                        <Palette size={13} />
+                      )}
+                      <span>{isLoadingThis ? 'CARREGANDO...' : 'PERSONALIZAR'}</span>
+                    </button>
+                  </div>
                 </div>
               </div>
-
-              {/* Actions: VISUALIZAR | PERSONALIZAR */}
-              <div className="p-4 pt-0">
-                <div className="grid grid-cols-2 gap-2 pt-3 border-t border-white/5">
-                  <button
-                    onClick={() => onPreviewTemplate(template)}
-                    className="py-2 px-3 bg-[#161427] hover:bg-[#201d38] border border-purple-500/25 text-gray-200 hover:text-white rounded-xl text-xs font-semibold flex items-center justify-center gap-1.5 transition-all"
-                  >
-                    <Eye size={13} className="text-purple-400" />
-                    <span>VISUALIZAR</span>
-                  </button>
-
-                  <button
-                    onClick={() => onCustomizeTemplate(template)}
-                    className="py-2 px-3 bg-gradient-to-r from-purple-600 to-violet-600 hover:from-purple-500 hover:to-violet-500 text-white rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 shadow-[0_2px_12px_rgba(147,51,234,0.4)] active:scale-95 transition-all"
-                  >
-                    <Palette size={13} />
-                    <span>PERSONALIZAR</span>
-                  </button>
-                </div>
-              </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
       )}
 

@@ -1,9 +1,10 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useRef } from 'react';
 import { useData } from '../context/DataContext';
 import { useAuth } from '../context/AuthContext';
 import { Niche, BiositeTemplate, UserProfile, EditableField, FieldType, UserProject } from '../types';
 import { analyzeHtmlForBiosite, stampDataBioAttributes, injectVisualInspectorScript } from '../utils/htmlAnalyzer';
 import { unpackBiositeZip, downloadBiositeZip } from '../utils/zipManager';
+import { optimizeCoverImage, uploadCoverToServer } from '../utils/coverUpload';
 import { NicheIconMap } from './Icons';
 import {
   Shield,
@@ -36,7 +37,9 @@ import {
   ExternalLink,
   Download,
   Copy,
-  X
+  X,
+  Image as ImageIcon,
+  Loader2
 } from 'lucide-react';
 
 export const AdminDashboard: React.FC = () => {
@@ -51,6 +54,7 @@ export const AdminDashboard: React.FC = () => {
     addTemplate,
     updateTemplate,
     deleteTemplate,
+    loadTemplateFull,
     updateUserStatus,
     seedInitialDataIfEmpty,
   } = useData();
@@ -154,6 +158,7 @@ export const AdminDashboard: React.FC = () => {
   // MODEL ACTIONS: TEST, EDIT, DUPLICATE
   // ==========================================
   const [testingModel, setTestingModel] = useState<BiositeTemplate | null>(null);
+  const [loadingTestId, setLoadingTestId] = useState<string | null>(null);
   const [editingModel, setEditingModel] = useState<BiositeTemplate | null>(null);
   const [editingModelForm, setEditingModelForm] = useState({
     name: '',
@@ -162,6 +167,35 @@ export const AdminDashboard: React.FC = () => {
     coverImage: '',
     status: 'published' as 'draft' | 'published',
   });
+
+  // Cover upload states for Edit Model
+  const [selectedCoverFile, setSelectedCoverFile] = useState<File | null>(null);
+  const [coverPreviewUrl, setCoverPreviewUrl] = useState<string | null>(null);
+  const [isUploadingCover, setIsUploadingCover] = useState(false);
+  const [coverUploadStatusText, setCoverUploadStatusText] = useState<string | null>(null);
+  const editCoverInputRef = useRef<HTMLInputElement>(null);
+
+  // Cover upload states for Import/New Model
+  const [newModelCoverFile, setNewModelCoverFile] = useState<File | null>(null);
+  const [newModelCoverPreview, setNewModelCoverPreview] = useState<string | null>(null);
+  const [isUploadingNewCover, setIsUploadingNewCover] = useState(false);
+  const newModelCoverInputRef = useRef<HTMLInputElement>(null);
+
+  const handleTestModel = async (tmpl: BiositeTemplate) => {
+    try {
+      setLoadingTestId(tmpl.id);
+      let target = tmpl;
+      if (!tmpl.htmlContent) {
+        target = await loadTemplateFull(tmpl.id);
+      }
+      setTestingModel(target);
+    } catch (err) {
+      console.warn('Erro ao carregar modelo para teste:', err);
+      setTestingModel(tmpl);
+    } finally {
+      setLoadingTestId(null);
+    }
+  };
 
   const handleOpenEditModel = (tmpl: BiositeTemplate) => {
     setEditingModel(tmpl);
@@ -172,11 +206,92 @@ export const AdminDashboard: React.FC = () => {
       coverImage: tmpl.coverImage,
       status: tmpl.status,
     });
+    setSelectedCoverFile(null);
+    setCoverPreviewUrl(null);
+    setCoverUploadStatusText(null);
+  };
+
+  const handleCoverFileSelected = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    try {
+      const optimized = await optimizeCoverImage(file);
+      setSelectedCoverFile(file);
+      setCoverPreviewUrl(optimized.dataUrl);
+      setCoverUploadStatusText(null);
+    } catch (err: any) {
+      alert('Erro ao otimizar imagem: ' + err.message);
+    }
+  };
+
+  const handleCancelCoverChange = () => {
+    setSelectedCoverFile(null);
+    setCoverPreviewUrl(null);
+    setCoverUploadStatusText(null);
+    if (editCoverInputRef.current) {
+      editCoverInputRef.current.value = '';
+    }
+  };
+
+  const handleSaveCoverOnly = async () => {
+    if (!editingModel || !coverPreviewUrl) return;
+    try {
+      setIsUploadingCover(true);
+      setCoverUploadStatusText('ENVIANDO CAPA...');
+      const finalUrl = await uploadCoverToServer(coverPreviewUrl, editingModel.id);
+      setCoverUploadStatusText('✓ CAPA ENVIADA');
+
+      setCoverUploadStatusText('SALVANDO...');
+      await updateTemplate(editingModel.id, {
+        coverImage: finalUrl,
+        updatedAt: new Date().toISOString(),
+      });
+
+      setEditingModelForm((prev) => ({ ...prev, coverImage: finalUrl }));
+      setEditingModel((prev) => (prev ? { ...prev, coverImage: finalUrl } : null));
+      setCoverUploadStatusText('✓ CAPA SALVA');
+
+      setTimeout(() => {
+        setSelectedCoverFile(null);
+        setCoverPreviewUrl(null);
+        setCoverUploadStatusText(null);
+        if (editCoverInputRef.current) {
+          editCoverInputRef.current.value = '';
+        }
+      }, 1500);
+    } catch (err: any) {
+      alert('Erro ao salvar capa: ' + err.message);
+      setCoverUploadStatusText(null);
+    } finally {
+      setIsUploadingCover(false);
+    }
+  };
+
+  const handleNewModelCoverSelected = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    try {
+      const optimized = await optimizeCoverImage(file);
+      setNewModelCoverFile(file);
+      setNewModelCoverPreview(optimized.dataUrl);
+      setModelCoverImage(optimized.dataUrl);
+    } catch (err: any) {
+      alert('Erro ao otimizar imagem: ' + err.message);
+    }
   };
 
   const handleSaveEditedModel = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!editingModel || !editingModelForm.name.trim()) return;
+
+    let finalCoverUrl = editingModelForm.coverImage;
+    if (coverPreviewUrl) {
+      try {
+        finalCoverUrl = await uploadCoverToServer(coverPreviewUrl, editingModel.id);
+      } catch (err) {
+        console.warn('Erro ao enviar imagem de capa, utilizando valor em tela:', err);
+      }
+    }
 
     const targetNiche = niches.find((n) => n.id === editingModelForm.nicheId) || niches[0];
     await updateTemplate(editingModel.id, {
@@ -184,7 +299,7 @@ export const AdminDashboard: React.FC = () => {
       description: editingModelForm.description.trim(),
       nicheId: targetNiche?.id || editingModel.nicheId,
       nicheName: targetNiche?.name || editingModel.nicheName,
-      coverImage: editingModelForm.coverImage,
+      coverImage: finalCoverUrl,
       status: editingModelForm.status,
       updatedAt: new Date().toISOString(),
     });
@@ -333,13 +448,22 @@ export const AdminDashboard: React.FC = () => {
       const stampedHtml = stampDataBioAttributes(workingHtml, analyzedFields);
       const templateId = `template_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`;
 
+      let finalCover = modelCoverImage;
+      if (newModelCoverPreview) {
+        try {
+          finalCover = await uploadCoverToServer(newModelCoverPreview, templateId);
+        } catch (err) {
+          console.warn('Erro ao enviar capa do novo modelo:', err);
+        }
+      }
+
       const newTemplate: BiositeTemplate = {
         id: templateId,
         name: modelName.trim(),
         nicheId: targetNiche?.id || 'barbearia',
         nicheName: targetNiche?.name || 'Barbearia',
         description: modelDescription.trim() || 'Modelo profissional BIO FÁCIL.',
-        coverImage: modelCoverImage,
+        coverImage: finalCover,
         version: 1,
         status: modelStatus,
         htmlContent: stampedHtml,
@@ -894,6 +1018,39 @@ export const AdminDashboard: React.FC = () => {
                     </select>
                   </div>
                 </div>
+
+                {/* Direct Cover Upload for New Model */}
+                <div className="pt-3 border-t border-white/5 space-y-2">
+                  <label className="block text-[11px] font-bold text-white uppercase tracking-wider">
+                    CAPA DO MODELO (PREFERENCIALMENTE 1:1 - 1080×1080)
+                  </label>
+                  <div className="flex flex-col sm:flex-row items-center gap-4 bg-[#121020] border border-purple-500/20 rounded-2xl p-4">
+                    <div className="w-20 h-20 rounded-xl overflow-hidden border border-purple-500/30 bg-black aspect-square shrink-0 relative">
+                      <img
+                        src={newModelCoverPreview || modelCoverImage}
+                        alt="Capa"
+                        className="w-full h-full object-cover"
+                        style={{ aspectRatio: '1 / 1', objectFit: 'cover' }}
+                      />
+                    </div>
+                    <div className="flex-1 space-y-1.5 text-left">
+                      <label className="inline-flex items-center gap-2 px-3.5 py-2 bg-[#1b1731] hover:bg-[#252042] border border-purple-500/35 hover:border-purple-400 text-purple-200 hover:text-white rounded-xl text-xs font-semibold cursor-pointer transition-all shadow-sm">
+                        <Upload size={14} className="text-purple-400" />
+                        <span>ESCOLHER NOVA CAPA</span>
+                        <input
+                          ref={newModelCoverInputRef}
+                          type="file"
+                          accept=".png,.jpg,.jpeg,.webp"
+                          onChange={handleNewModelCoverSelected}
+                          className="hidden"
+                        />
+                      </label>
+                      <p className="text-[10px] text-gray-400">
+                        Formatos aceitos: PNG, JPG, JPEG, WEBP. A imagem será otimizada automaticamente com alta nitidez no padrão quadrado 1:1.
+                      </p>
+                    </div>
+                  </div>
+                </div>
               </div>
 
               {/* Split Preview REAL & Fields List */}
@@ -1089,8 +1246,20 @@ export const AdminDashboard: React.FC = () => {
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
             {templates.map((tmpl) => (
               <div key={tmpl.id} className="bg-[#0e0d1a] border border-purple-500/20 hover:border-purple-400/40 rounded-2xl overflow-hidden flex flex-col justify-between transition-all shadow-[0_8px_25px_rgba(0,0,0,0.6)]">
-                <div className="relative aspect-video bg-[#0c0b14] overflow-hidden">
-                  <img src={tmpl.coverImage} alt={tmpl.name} className="w-full h-full object-cover" />
+                {/* Square 1:1 Cover Container */}
+                <div className="relative aspect-square w-full bg-[#0c0b14] overflow-hidden">
+                  <img
+                    src={tmpl.coverImage}
+                    alt={tmpl.name}
+                    loading="lazy"
+                    decoding="async"
+                    onError={(e) => {
+                      (e.currentTarget as HTMLElement).style.opacity = '0.3';
+                    }}
+                    className="w-full h-full object-cover"
+                    style={{ aspectRatio: '1 / 1', objectFit: 'cover' }}
+                  />
+                  <div className="absolute inset-0 bg-gradient-to-t from-[#0e0d1a] via-transparent to-black/20 pointer-events-none" />
                   <span className={`absolute top-2.5 right-2.5 text-[9px] font-mono font-bold px-2 py-0.5 rounded-md ${tmpl.status === 'published' ? 'bg-emerald-950/90 text-emerald-300 border border-emerald-500/50' : 'bg-amber-950/90 text-amber-300 border border-amber-500/50'}`}>
                     {tmpl.status === 'published' ? 'PUBLICADO' : 'RASCUNHO'}
                   </span>
@@ -1098,8 +1267,8 @@ export const AdminDashboard: React.FC = () => {
                 <div className="p-4 flex-1 flex flex-col justify-between">
                   <div>
                     <div className="flex items-center justify-between text-[10px] font-mono text-purple-400 uppercase">
-                      <span>{tmpl.nicheName} · v{tmpl.version}.0</span>
-                      <span className="text-gray-500">{new Date(tmpl.createdAt).toLocaleDateString('pt-BR')}</span>
+                      <span>{tmpl.nicheName} · v{tmpl.version || 1}.0</span>
+                      <span className="text-gray-500">{new Date(tmpl.createdAt || Date.now()).toLocaleDateString('pt-BR')}</span>
                     </div>
                     <h3 className="font-bold text-white text-base mt-1 mb-1 line-clamp-1">{tmpl.name}</h3>
                     <p className="text-xs text-gray-400 line-clamp-2 leading-relaxed mb-2">{tmpl.description}</p>
@@ -1110,12 +1279,17 @@ export const AdminDashboard: React.FC = () => {
                   <div className="pt-3 mt-3 border-t border-white/5 flex flex-wrap items-center justify-between gap-1.5 text-xs">
                     <div className="flex items-center gap-1">
                       <button
-                        onClick={() => setTestingModel(tmpl)}
-                        className="px-2 py-1 bg-[#141224] hover:bg-purple-900/40 text-purple-300 border border-purple-500/25 rounded-lg text-[11px] flex items-center gap-1 transition-colors"
+                        onClick={() => handleTestModel(tmpl)}
+                        disabled={loadingTestId === tmpl.id}
+                        className="px-2 py-1 bg-[#141224] hover:bg-purple-900/40 text-purple-300 border border-purple-500/25 rounded-lg text-[11px] flex items-center gap-1 transition-colors disabled:opacity-50"
                         title="Testar Modelo"
                       >
-                        <Eye size={12} />
-                        <span>TESTAR</span>
+                        {loadingTestId === tmpl.id ? (
+                          <Loader2 size={12} className="animate-spin text-purple-400" />
+                        ) : (
+                          <Eye size={12} />
+                        )}
+                        <span>{loadingTestId === tmpl.id ? '...' : 'TESTAR'}</span>
                       </button>
                       <button
                         onClick={() => handleOpenEditModel(tmpl)}
@@ -1196,7 +1370,7 @@ export const AdminDashboard: React.FC = () => {
           {/* Modal Editar Modelo */}
           {editingModel && (
             <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/85 backdrop-blur-md">
-              <div className="w-full max-w-lg bg-[#0e0d18] border border-purple-500/30 rounded-3xl p-6 shadow-2xl text-white">
+              <div className="w-full max-w-lg max-h-[90vh] overflow-y-auto bg-[#0e0d18] border border-purple-500/30 rounded-3xl p-6 shadow-2xl text-white">
                 <div className="flex items-center justify-between pb-3 mb-4 border-b border-white/10">
                   <h3 className="text-lg font-display font-bold">Editar Informações do Modelo</h3>
                   <button onClick={() => setEditingModel(null)} className="text-gray-400 hover:text-white">
@@ -1238,14 +1412,76 @@ export const AdminDashboard: React.FC = () => {
                     />
                   </div>
 
-                  <div>
-                    <label className="block text-xs font-medium text-gray-300 mb-1">URL da Imagem de Capa</label>
-                    <input
-                      type="url"
-                      value={editingModelForm.coverImage}
-                      onChange={(e) => setEditingModelForm({ ...editingModelForm, coverImage: e.target.value })}
-                      className="w-full bg-[#141224] border border-purple-500/25 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-purple-500"
-                    />
+                  {/* CAPA DO MODELO (UPLOAD DIRETO) */}
+                  <div className="pt-2 border-t border-white/5 space-y-3">
+                    <label className="block text-xs font-bold text-white uppercase tracking-wider">
+                      CAPA DO MODELO
+                    </label>
+
+                    <div className="bg-[#121020] border border-purple-500/20 rounded-2xl p-4 space-y-3">
+                      <span className="text-[11px] font-mono text-purple-300 block">
+                        CAPA ATUAL
+                      </span>
+
+                      <div className="flex items-center gap-4">
+                        <div className="w-24 h-24 rounded-xl overflow-hidden border border-purple-500/30 bg-black aspect-square shrink-0 relative">
+                          <img
+                            src={coverPreviewUrl || editingModelForm.coverImage}
+                            alt="Capa"
+                            className="w-full h-full object-cover"
+                            style={{ aspectRatio: '1 / 1', objectFit: 'cover' }}
+                          />
+                        </div>
+
+                        <div className="space-y-2">
+                          <label className="inline-flex items-center gap-2 px-3.5 py-2 bg-[#1b1731] hover:bg-[#252042] border border-purple-500/35 hover:border-purple-400 text-purple-200 hover:text-white rounded-xl text-xs font-semibold cursor-pointer transition-all shadow-sm">
+                            <Upload size={14} className="text-purple-400" />
+                            <span>ESCOLHER NOVA CAPA</span>
+                            <input
+                              ref={editCoverInputRef}
+                              type="file"
+                              accept=".png,.jpg,.jpeg,.webp"
+                              onChange={handleCoverFileSelected}
+                              className="hidden"
+                            />
+                          </label>
+                          <p className="text-[10px] text-gray-400">
+                            Formatos aceitos: PNG, JPG, JPEG, WEBP. Proporção 1:1 (1080×1080).
+                          </p>
+                        </div>
+                      </div>
+
+                      {coverPreviewUrl && (
+                        <div className="pt-3 border-t border-white/5 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                          <span className="text-xs font-mono text-amber-300">
+                            {coverUploadStatusText || 'Nova imagem selecionada (prévia acima)'}
+                          </span>
+                          <div className="flex items-center gap-2">
+                            <button
+                              type="button"
+                              onClick={handleCancelCoverChange}
+                              disabled={isUploadingCover}
+                              className="px-3 py-1.5 text-xs text-gray-400 hover:text-white bg-white/5 rounded-lg transition-colors"
+                            >
+                              CANCELAR
+                            </button>
+                            <button
+                              type="button"
+                              onClick={handleSaveCoverOnly}
+                              disabled={isUploadingCover}
+                              className="px-4 py-1.5 bg-gradient-to-r from-purple-600 to-violet-600 hover:from-purple-500 hover:to-violet-500 text-white font-bold rounded-lg text-xs flex items-center gap-1.5 shadow-sm transition-all disabled:opacity-50"
+                            >
+                              {isUploadingCover ? (
+                                <Loader2 size={13} className="animate-spin" />
+                              ) : (
+                                <Check size={13} />
+                              )}
+                              <span>{isUploadingCover ? (coverUploadStatusText || 'SALVANDO...') : 'SALVAR CAPA'}</span>
+                            </button>
+                          </div>
+                        </div>
+                      )}
+                    </div>
                   </div>
 
                   <div>

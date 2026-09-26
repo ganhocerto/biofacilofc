@@ -29,6 +29,7 @@ interface DataContextType {
   addTemplate: (template: Omit<BiositeTemplate, 'createdAt' | 'updatedAt'>) => Promise<void>;
   updateTemplate: (id: string, data: Partial<BiositeTemplate>) => Promise<void>;
   deleteTemplate: (id: string) => Promise<void>;
+  loadTemplateFull: (templateId: string) => Promise<BiositeTemplate>;
   saveProject: (project: Omit<UserProject, 'createdAt' | 'updatedAt'>) => Promise<void>;
   deleteProject: (id: string) => Promise<void>;
   updateUserStatus: (uid: string, status: UserProfile['status'], role?: UserProfile['role']) => Promise<void>;
@@ -39,18 +40,37 @@ const DataContext = createContext<DataContextType | undefined>(undefined);
 
 export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const { currentUser, isAdmin, isApproved } = useAuth();
-  const [niches, setNiches] = useState<Niche[]>([]);
-  const [templates, setTemplates] = useState<BiositeTemplate[]>([]);
+  const [niches, setNiches] = useState<Niche[]>(INITIAL_NICHES as Niche[]);
+  const [templates, setTemplates] = useState<BiositeTemplate[]>(INITIAL_TEMPLATES);
   const [userProjects, setUserProjects] = useState<UserProject[]>([]);
   const [allUsers, setAllUsers] = useState<UserProfile[]>([]);
   const [loadingData, setLoadingData] = useState(true);
 
-  // 1. Seed initial data if collections are empty or missing niches
+  // In-memory cache for full template HTML to ensure zero lag and lazy loading
+  const fullTemplatesCache = React.useRef<Map<string, BiositeTemplate>>(new Map());
+
+  // Populate cache with initial templates
+  useEffect(() => {
+    INITIAL_TEMPLATES.forEach((t) => {
+      fullTemplatesCache.current.set(t.id, t);
+    });
+  }, []);
+
+  // Safety timeout: ensure loadingData unblocks within 2.5s
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setLoadingData(false);
+    }, 2500);
+    return () => clearTimeout(timer);
+  }, []);
+
+  // 1. Seed initial data (callable manually by admin)
   const seedInitialDataIfEmpty = async () => {
+    if (!isAdmin) return;
     try {
-      // Check niches - ensure exact 10 initial niches exist in Firestore
-      const nichesSnap = await getDocs(collection(db, 'niches'));
-      const existingDocs = nichesSnap.docs;
+      // Check niches - ensure official niches exist in Firestore
+      const nichesSnap = await getDocs(collection(db, 'niches')).catch(() => null);
+      const existingDocs = nichesSnap?.docs || [];
       const initialIds = new Set(INITIAL_NICHES.map((n) => n.id));
 
       // Remove obsolete niche documents if any
@@ -60,7 +80,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
         }
       }
 
-      // Upsert the 10 official niches
+      // Upsert official niches
       for (const item of INITIAL_NICHES) {
         const existingDoc = existingDocs.find((d) => d.id === item.id);
         const data = existingDoc?.data();
@@ -74,62 +94,28 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
             updatedAt: new Date().toISOString(),
           },
           { merge: true }
-        );
+        ).catch(() => {});
       }
 
       // Check templates
-      const templatesSnap = await getDocs(collection(db, 'templates'));
-      if (templatesSnap.empty) {
+      const templatesSnap = await getDocs(collection(db, 'templates')).catch(() => null);
+      if (!templatesSnap || templatesSnap.empty) {
         for (const item of INITIAL_TEMPLATES) {
           await setDoc(doc(db, 'templates', item.id), {
             ...item,
             createdAt: new Date().toISOString(),
             updatedAt: new Date().toISOString(),
-          });
-        }
-      } else {
-        // Update any existing template with obsolete niche IDs
-        for (const tDoc of templatesSnap.docs) {
-          const tData = tDoc.data();
-          if (tData.nicheId === 'estetica' || tData.nicheId === 'salao-beleza') {
-            await updateDoc(doc(db, 'templates', tDoc.id), {
-              nicheId: 'beleza-estetica',
-              nicheName: 'Beleza & Estética',
-            }).catch(() => {});
-          } else if (tData.nicheId === 'restaurante-gastronomia') {
-            await updateDoc(doc(db, 'templates', tDoc.id), {
-              nicheId: 'gastronomia-delivery',
-              nicheName: 'Gastronomia & Delivery',
-            }).catch(() => {});
-          }
-        }
-
-        // Ensure Black Crown Barber Club template is kept up to date
-        const barberDoc = await getDoc(doc(db, 'templates', 'template-barbearia-luxo')).catch(() => null);
-        if (!barberDoc || !barberDoc.exists() || barberDoc.data()?.name === 'Barbearia Viking & Navalha') {
-          const barberTmpl = INITIAL_TEMPLATES.find(t => t.id === 'template-barbearia-luxo');
-          if (barberTmpl) {
-            await setDoc(doc(db, 'templates', barberTmpl.id), {
-              ...barberTmpl,
-              createdAt: barberDoc?.data()?.createdAt || new Date().toISOString(),
-              updatedAt: new Date().toISOString(),
-            }, { merge: true });
-          }
+          }).catch(() => {});
         }
       }
     } catch (err) {
-      console.warn('Erro ao verificar/semear dados iniciais:', err);
+      console.warn('Erro ao sincronizar dados iniciais:', err);
     }
   };
 
-  // Run seed check on mount
-  useEffect(() => {
-    seedInitialDataIfEmpty();
-  }, []);
-
   // 2. Listen to Niches (publicly accessible)
   useEffect(() => {
-    const q = query(collection(db, 'niches'), orderBy('order', 'asc'));
+    const q = collection(db, 'niches');
     const unsubscribe = onSnapshot(
       q,
       (snapshot) => {
@@ -137,29 +123,33 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
         snapshot.forEach((doc) => {
           list.push(doc.data() as Niche);
         });
-        setNiches(list);
-        if (list.length === 0) {
-          seedInitialDataIfEmpty();
+        // Sort in memory by order
+        list.sort((a, b) => (a.order || 99) - (b.order || 99));
+
+        if (list.length > 0) {
+          setNiches(list);
+        } else {
+          setNiches(INITIAL_NICHES as Niche[]);
         }
       },
       (error) => {
-        console.warn('Erro ao escutar nichos:', error);
+        console.warn('Erro ao escutar nichos, utilizando nichos padrão:', error);
+        setNiches(INITIAL_NICHES as Niche[]);
       }
     );
 
     return () => unsubscribe();
   }, []);
 
-  // 3. Listen to Templates
+  // 3. Listen to Templates (with in-memory sorting to avoid composite index failure)
   useEffect(() => {
     let q;
     if (isAdmin) {
-      q = query(collection(db, 'templates'), orderBy('createdAt', 'desc'));
+      q = collection(db, 'templates');
     } else {
       q = query(
         collection(db, 'templates'),
-        where('status', '==', 'published'),
-        orderBy('createdAt', 'desc')
+        where('status', '==', 'published')
       );
     }
 
@@ -168,19 +158,82 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
       (snapshot) => {
         const list: BiositeTemplate[] = [];
         snapshot.forEach((doc) => {
-          list.push(doc.data() as BiositeTemplate);
+          const data = doc.data() as BiositeTemplate;
+          list.push(data);
+          if (data.htmlContent) {
+            fullTemplatesCache.current.set(data.id, data);
+          }
         });
-        setTemplates(list);
+
+        // In-memory sort by createdAt desc
+        list.sort((a, b) => {
+          const dateA = new Date(a.createdAt || 0).getTime();
+          const dateB = new Date(b.createdAt || 0).getTime();
+          return dateB - dateA;
+        });
+
+        if (list.length > 0) {
+          setTemplates(list);
+        } else {
+          const fallback = INITIAL_TEMPLATES.filter((t) => isAdmin || t.status === 'published');
+          setTemplates(fallback);
+          fallback.forEach((t) => fullTemplatesCache.current.set(t.id, t));
+        }
         setLoadingData(false);
       },
       (error) => {
-        console.warn('Erro ao escutar templates:', error);
+        console.warn('Erro ao escutar templates, utilizando catálogo local:', error);
+        const fallback = INITIAL_TEMPLATES.filter((t) => isAdmin || t.status === 'published');
+        setTemplates(fallback);
+        fallback.forEach((t) => fullTemplatesCache.current.set(t.id, t));
         setLoadingData(false);
       }
     );
 
     return () => unsubscribe();
   }, [isAdmin]);
+
+  // Lazy load full template HTML on demand
+  const loadTemplateFull = async (templateId: string): Promise<BiositeTemplate> => {
+    // 1. Check in-memory cache
+    if (fullTemplatesCache.current.has(templateId)) {
+      const cached = fullTemplatesCache.current.get(templateId)!;
+      if (cached.htmlContent && cached.htmlContent.trim().length > 0) {
+        return cached;
+      }
+    }
+
+    // 2. Fetch specific doc from Firestore with timeout
+    try {
+      const docRef = doc(db, 'templates', templateId);
+      const snapPromise = getDoc(docRef);
+      const timeoutPromise = new Promise<null>((resolve) => setTimeout(() => resolve(null), 3500));
+      const snap = await Promise.race([snapPromise, timeoutPromise]);
+
+      if (snap && snap.exists()) {
+        const full = snap.data() as BiositeTemplate;
+        fullTemplatesCache.current.set(templateId, full);
+        return full;
+      }
+    } catch (err) {
+      console.warn('Erro ao carregar HTML completo do Firestore:', err);
+    }
+
+    // 3. Fallback to INITIAL_TEMPLATES
+    const initial = INITIAL_TEMPLATES.find((t) => t.id === templateId);
+    if (initial) {
+      fullTemplatesCache.current.set(templateId, initial);
+      return initial;
+    }
+
+    // 4. Fallback to template in state
+    const inState = templates.find((t) => t.id === templateId);
+    if (inState) {
+      return inState;
+    }
+
+    throw new Error('Modelo não encontrado');
+  };
 
   // 4. Listen to User Projects
   useEffect(() => {
@@ -338,6 +391,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
         addTemplate,
         updateTemplate,
         deleteTemplate,
+        loadTemplateFull,
         saveProject,
         deleteProject,
         updateUserStatus,
